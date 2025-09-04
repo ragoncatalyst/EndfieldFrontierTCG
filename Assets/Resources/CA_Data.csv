@@ -1,0 +1,8 @@
+CA_ID,CA_Name_DIS,CA_Type,CA_HPMaximum,CA_ATK_INI,CA_EffectInfo_DIS,CA_DPCost,CA_MainImage
+1,Perlica,Unit,8,3,我方手牌具有-1cost,5,Perlica2
+2,Gilberta,Unit,8,2,我方干员攻击后，回复2生命值,6,Gilberta2
+3,Xaihi,Unit,8,2,我方单位具有+1攻击力,4,Xaihi2
+4,Avywenna,Unit,10,3,此单位受到的一切伤害-1,5,Avywenna2
+5,Snowshine,Unit,10,2,此单位受到的一切伤害-1,4,Snowshine2
+
+
