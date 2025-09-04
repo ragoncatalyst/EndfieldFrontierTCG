@@ -1,5 +1,6 @@
 using UnityEngine;
 using EndfieldFrontierTCG.CA;
+using EndfieldFrontierTCG.Environment;
 using System.Collections.Generic;
 
 namespace EndfieldFrontierTCG.Hand
@@ -18,6 +19,12 @@ namespace EndfieldFrontierTCG.Hand
 		[Range(-180f, 180f)] public float yawAdjustDeg = 0f;
 		[Tooltip("吸附阈值（米），拖拽到该距离内则吸附到槽位")] public float snapDistance = 0.25f;
 
+		[Header("Auto Placement")]
+		[Tooltip("是否自动把手牌栏放到摄像机视野底部（同X于摄像机）")]
+		public bool autoPlaceAtCameraBottom = true;
+		[Tooltip("在视口底部往上保留的归一化边距 (0-0.2 比较合适)")]
+		[Range(0f, 0.2f)] public float viewportBottomMargin = 0.06f;
+
 		[Header("Depth Stacking")]
 		public bool stackDepthByIndex = true;
 		public float depthPerSlot = 0.01f;
@@ -29,6 +36,14 @@ namespace EndfieldFrontierTCG.Hand
 		public float lineLocalY = 0f;
 		public float lineYawOffsetDeg = 90f;
 
+		[Header("Card Rotation")]
+		[Tooltip("是否使用固定欧拉角作为卡牌基础朝向（避免被代码强制成难以修改的姿态）")]
+		public bool useFixedCardEuler = true;
+		[Tooltip("卡牌基础欧拉角（作为输出旋转的基准）")]
+		public Vector3 fixedCardEuler = new Vector3(90f, 0f, 0f);
+		[Tooltip("是否根据手牌线方向自动叠加水平朝向（绕 Y 轴）")]
+		public bool yawAlignToLineDirection = true;
+
 		[Header("Hover Interact")]
 		[Range(0f, 100f)] public float hoverX = 0.06f;
 		[Range(0.01f, 1f)] public float hoverXLerp = 0.1f;
@@ -39,6 +54,8 @@ namespace EndfieldFrontierTCG.Hand
 		public bool invertHoverSide = false;
 		[Tooltip("ENTER 来源判定的像素冗余（用于‘从下方进入’判断）")] [Range(0f, 20f)] public float enterFromBelowSlackPx = 6f;
 		[Tooltip("把卡牌下边缘向下扩展的像素（把红色区域等同为碰撞箱的一部分）")] [Range(0f, 60f)] public float hoverBottomExtendPx = 12f;
+		[Tooltip("在世界坐标系 Z- 方向虚拟延伸碰撞箱的距离（米），仅用于 hover 检测")]
+		[Range(0f, 0.5f)] public float hoverExtendZBackward = 0.05f;
 
 		[Header("Input Thresholds")]
 		[Tooltip("开始拖拽所需的最小鼠标位移（像素）")]
@@ -120,6 +137,18 @@ namespace EndfieldFrontierTCG.Hand
 
 		private void LateUpdate()
 		{
+			// 自动将手牌栏放置到摄像机视野底部（与摄像机同 X）。
+			if (autoPlaceAtCameraBottom)
+			{
+				var cam = Camera.main;
+				if (cam != null)
+				{
+					float yPlane = coupleToTable ? (GetTableYOr(transform.position.y) + handHeightAboveTable) : transform.position.y;
+					Vector3 p = WorldPointOnYPlaneByViewport(cam, new Vector2(0.5f, Mathf.Clamp01(viewportBottomMargin)), yPlane, transform.position);
+					transform.position = new Vector3(cam.transform.position.x, yPlane, p.z);
+				}
+			}
+
 			int h = 17;
 			h = h * 31 + hoverX.GetHashCode();
 			h = h * 31 + hoverXLerp.GetHashCode();
@@ -154,6 +183,28 @@ namespace EndfieldFrontierTCG.Hand
 			{
 				_activePressed = null;
 			}
+		}
+
+		[Header("Table Coupling")]
+		[Tooltip("启用后，手牌 Y 以桌面高度加偏移计算；关闭则保持自身 Y 平面")]
+		public bool coupleToTable = false;
+		[Tooltip("手牌相对于桌面的高度（米）")]
+		public float handHeightAboveTable = 0.03f;
+
+		private static float GetTableYOr(float fallback)
+		{
+			var t = GameObject.FindObjectOfType<TablePlane>(true);
+			if (t != null) return t.SurfaceY;
+			return fallback;
+		}
+
+		private static Vector3 WorldPointOnYPlaneByViewport(Camera cam, Vector2 viewport, float yPlane, Vector3 fallback)
+		{
+			Ray r = cam.ViewportPointToRay(new Vector3(viewport.x, viewport.y, 0f));
+			if (Mathf.Abs(r.direction.y) < 1e-6f) return fallback; // 平行，返回备用
+			float t = (yPlane - r.origin.y) / r.direction.y;
+			if (t < 0f) return fallback;
+			return r.origin + r.direction * t;
 		}
 
 		private void DriveDragByRay()
@@ -448,9 +499,14 @@ namespace EndfieldFrontierTCG.Hand
 			Vector3 fwdXZ = new Vector3(fwdW.x, 0f, fwdW.z);
 			if (fwdXZ.sqrMagnitude < 1e-6f) fwdXZ = transform.forward;
 			fwdXZ.Normalize();
-			float yaw = Mathf.Atan2(fwdXZ.x, fwdXZ.z) * Mathf.Rad2Deg;
-			if (flipForward) yaw += 180f;
-			rot = Quaternion.Euler(90f, yaw + yawAdjustDeg + lineYawOffsetDeg, 0f);
+			float yaw = 0f;
+			if (yawAlignToLineDirection)
+			{
+				yaw = Mathf.Atan2(fwdXZ.x, fwdXZ.z) * Mathf.Rad2Deg;
+				if (flipForward) yaw += 180f;
+			}
+			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
+			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
 			pos = pWorld + Vector3.up * offsetUp + fwdXZ * offsetForward;
 			if (stackDepthByIndex && Camera.main != null && slots > 0)
 			{
@@ -470,9 +526,14 @@ namespace EndfieldFrontierTCG.Hand
 			Vector3 fwdXZ = new Vector3(fwdW.x, 0f, fwdW.z);
 			if (fwdXZ.sqrMagnitude < 1e-6f) fwdXZ = transform.forward;
 			fwdXZ.Normalize();
-			float yaw = Mathf.Atan2(fwdXZ.x, fwdXZ.z) * Mathf.Rad2Deg;
-			if (flipForward) yaw += 180f;
-			rot = Quaternion.Euler(90f, yaw + yawAdjustDeg + lineYawOffsetDeg, 0f);
+			float yaw = 0f;
+			if (yawAlignToLineDirection)
+			{
+				yaw = Mathf.Atan2(fwdXZ.x, fwdXZ.z) * Mathf.Rad2Deg;
+				if (flipForward) yaw += 180f;
+			}
+			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
+			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
 			pos = pWorld + Vector3.up * offsetUp + fwdXZ * offsetForward;
 			if (stackDepthByIndex && Camera.main != null)
 			{

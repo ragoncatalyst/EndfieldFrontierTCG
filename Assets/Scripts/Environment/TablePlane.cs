@@ -14,7 +14,11 @@ namespace EndfieldFrontierTCG.Environment
 		public Vector2 offset = Vector2.zero;
 
 		[Header("Surface")]
-		public float SurfaceY = -10f;
+		public float SurfaceY = -0.5f;
+		[Tooltip("让桌面自动适配摄像机视野范围（在 SurfaceY 高度平面上）")]
+		public bool fitToCameraFrustum = true;
+		[Tooltip("在四周额外扩展的世界边距（米）")]
+		public float fitMargin = 0.2f;
 
 		private MeshRenderer _mr;
 
@@ -44,6 +48,7 @@ namespace EndfieldFrontierTCG.Environment
 		{
 			// 在编辑器与运行时持续保持桌面高度
 			ApplyY();
+			if (fitToCameraFrustum) FitSizeToCamera();
 		}
 
 		private void ApplyY()
@@ -76,6 +81,36 @@ namespace EndfieldFrontierTCG.Environment
 			// 接受阴影，自己不投射
 			_mr.receiveShadows = true;
 			_mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+		}
+
+		private void FitSizeToCamera()
+		{
+			var cam = Camera.main; if (cam == null) return;
+			float y = SurfaceY;
+			// 取视口四角在 y 平面的交点
+			Vector3 p00 = ViewOnPlane(cam, 0f, 0f, y, transform.position);
+			Vector3 p10 = ViewOnPlane(cam, 1f, 0f, y, transform.position);
+			Vector3 p01 = ViewOnPlane(cam, 0f, 1f, y, transform.position);
+			Vector3 p11 = ViewOnPlane(cam, 1f, 1f, y, transform.position);
+			// 计算包围盒（仅 XZ）
+			float minX = Mathf.Min(p00.x, p10.x, p01.x, p11.x) - fitMargin;
+			float maxX = Mathf.Max(p00.x, p10.x, p01.x, p11.x) + fitMargin;
+			float minZ = Mathf.Min(p00.z, p10.z, p01.z, p11.z) - fitMargin;
+			float maxZ = Mathf.Max(p00.z, p10.z, p01.z, p11.z) + fitMargin;
+			float sizeX = Mathf.Max(0.01f, maxX - minX);
+			float sizeZ = Mathf.Max(0.01f, maxZ - minZ);
+			// 设置平面缩放（假设原始 Mesh 是 1x1，沿 XZ 缩放）
+			transform.position = new Vector3((minX + maxX) * 0.5f, y, (minZ + maxZ) * 0.5f);
+			transform.localScale = new Vector3(sizeX, 1f, sizeZ);
+		}
+
+		private static Vector3 ViewOnPlane(Camera cam, float vx, float vy, float yPlane, Vector3 fallback)
+		{
+			Ray r = cam.ViewportPointToRay(new Vector3(vx, vy, 0f));
+			if (Mathf.Abs(r.direction.y) < 1e-6f) return fallback;
+			float t = (yPlane - r.origin.y) / r.direction.y;
+			if (t < 0f) return fallback;
+			return r.origin + r.direction * t;
 		}
 	}
 }
