@@ -965,6 +965,15 @@ MonoBehaviour:
   clickMaxDistance: 0.05
   returnFrontBias: 0.05
   returnSortingBoost: 20
+  snapReturnPhase1: 0.15
+  snapReturnPhase2: 0.18
+  dragFrontBias: 0.03
+  dragSortingBoost: 40
+  elevateWhenBlocked: 1
+  elevateMax: 0.12
+  elevateUpSpeed: 2
+  elevateDownSpeed: 2.5
+  collisionSmoothTime: 0.06
   returnPhase1XZCurve:
     serializedVersion: 2
     m_Curve:
@@ -978,41 +987,32 @@ MonoBehaviour:
       inWeight: 0
       outWeight: 0
     - serializedVersion: 3
-      time: 0.30541146
-      value: 0.1480751
-      inSlope: 1.8499752
-      outSlope: 1.8499752
+      time: 0.36685756
+      value: 0.08632778
+      inSlope: 0.43841866
+      outSlope: 0.43841866
       tangentMode: 0
       weightedMode: 0
       inWeight: 0.33333334
-      outWeight: 0.33333334
+      outWeight: 1
     - serializedVersion: 3
-      time: 0.38651899
-      value: 0.47284916
-      inSlope: 4.10554
-      outSlope: 4.10554
+      time: 0.50321406
+      value: 0.48905802
+      inSlope: 4.644972
+      outSlope: 4.644972
       tangentMode: 0
       weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.13075753
+      inWeight: 0.2539597
+      outWeight: 0
     - serializedVersion: 3
-      time: 0.41707045
-      value: 0.6218432
-      inSlope: 1.3397326
-      outSlope: 1.3397326
+      time: 0.6991207
+      value: 0.96968186
+      inSlope: 0.29597685
+      outSlope: 0.29597685
       tangentMode: 0
       weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.33333334
-    - serializedVersion: 3
-      time: 0.49495298
-      value: 0.79024863
-      inSlope: 0.9040043
-      outSlope: 0.9040043
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.33333334
+      inWeight: 0.5203145
+      outWeight: 0.3155061
     - serializedVersion: 3
       time: 1
       value: 1
@@ -1110,4 +1110,8 @@ MonoBehaviour:
     m_PostInfinity: 2
     m_RotationOrder: 4
   followDragSmooth: 0.04
+  hoverColliderExtendZ: 0.06
+  addShadowCasterHelper: 1
+  shadowCasterZOffset: -0.001
+  shadowCasterScaleMul: 1.02
   suppressOnMouseHandlers: 1

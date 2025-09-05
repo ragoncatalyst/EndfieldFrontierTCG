@@ -71,6 +71,9 @@ public class CardView3D : MonoBehaviour
     [Header("Return Visuals")]
     [Tooltip("在二阶段归位时，沿相机方向的前置偏移（米），避免被相邻卡遮挡")] public float returnFrontBias = 0.05f;
     [Tooltip("二阶段期间临时提高排序顺序，避免被相邻卡挡住")] public int returnSortingBoost = 20;
+    [Header("Snap Return Durations")]
+    public float snapReturnPhase1 = 0.15f;
+    public float snapReturnPhase2 = 0.18f;
 
     [Header("Drag Visuals")]
     [Tooltip("拖拽时朝向相机偏移的距离（米），避免与手牌同平面发生穿插")] public float dragFrontBias = 0.03f;
@@ -718,15 +721,29 @@ public class CardView3D : MonoBehaviour
         // 不切换到 kinematic，避免物理状态切换造成末尾突跳。改为在回家协程内部临时冻结
         // 若该牌属于某个 HandSplineZone（已设置 homePose），优先按两阶段“回手牌”路径归位
         var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+        // 优先尝试吸附到棋盘槽位
+        var unitMgr = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Board.SlotGridManager>(true);
+        EndfieldFrontierTCG.Board.SlotGridManager bestMgr = null; EndfieldFrontierTCG.Board.SlotBehaviour bestSlot = null; float best = float.PositiveInfinity;
+        for (int i = 0; i < unitMgr.Length; i++)
+        {
+            var s = unitMgr[i]?.GetNearestFreeSlot(transform.position); if (s == null) continue;
+            float d = Vector3.SqrMagnitude(s.transform.position - transform.position);
+            if (d < best) { best = d; bestMgr = unitMgr[i]; bestSlot = s; }
+        }
+        if (bestSlot != null)
+        {
+            bestSlot.Attach(this, returnFrontBias, snapReturnPhase1, snapReturnPhase2);
+            return;
+        }
         if (zone == null)
         {
             var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>(true);
-            float best = float.MaxValue; EndfieldFrontierTCG.Hand.HandSplineZone bestZ = null;
+            float best2 = float.MaxValue; EndfieldFrontierTCG.Hand.HandSplineZone bestZ = null;
             foreach (var z in zones)
             {
                 if (z == null) continue;
                 float d = (transform.position - z.transform.position).sqrMagnitude;
-                if (d < best) { best = d; bestZ = z; }
+                if (d < best2) { best2 = d; bestZ = z; }
             }
             zone = bestZ;
         }

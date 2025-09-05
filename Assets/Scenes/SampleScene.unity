@@ -688,6 +688,73 @@ MonoBehaviour:
   defaultCardScale: 1
   handDistanceFromCamera: 3
   handZoneY: 0.6
+--- !u!1 &1238345771
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1238345773}
+  - component: {fileID: 1238345772}
+  m_Layer: 0
+  m_Name: UnitZone
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1238345772
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1238345771}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dd3dec4660feb40c38fa9858d7de7093, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  slotPrefab: {fileID: 2164618870765965919, guid: ce660a072d59344239b408ec4db8a4a2, type: 3}
+  slotType: 0
+  rows: 2
+  cols: 5
+  cellSize: {x: 1.25, y: 2}
+  spacing: {x: 0.25, y: 0.25}
+  yawDeg: 0
+  yHeight: 0.02
+  origin: {fileID: 1946834782}
+  centerToCameraBottom: 1
+  viewportBottomMargin: 0.08
+  slots:
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  - {fileID: 0}
+  autoBuild: 1
+--- !u!4 &1238345773
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1238345771}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 14.035402, y: 0.35173643, z: -16.661367}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!21 &1685702902
 Material:
   serializedVersion: 8
@@ -830,7 +897,7 @@ MonoBehaviour:
   pressMoveThresholdPx: 8
   pressHoldThresholdSec: 0.06
   returnAheadZ: 1
-  returnPhase1: 0.4
+  returnPhase1: 0.7
   returnPhase2: 0.45
   debugLogs: 1
   handZoneRevision: rev_2025-09-03_01
@@ -1041,3 +1108,4 @@ SceneRoots:
   - {fileID: 1185402254}
   - {fileID: 1993397074}
   - {fileID: 289615525}
+  - {fileID: 1238345773}
