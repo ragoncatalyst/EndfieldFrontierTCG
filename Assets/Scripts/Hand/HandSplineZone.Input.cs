@@ -13,7 +13,7 @@ namespace EndfieldFrontierTCG.Hand
 				float my = Input.mousePosition.y;
 				if (mx >= minX && mx <= maxX && my >= (minY - hoverBottomExtendPx) && my <= maxY) return true;
 			}
-			// 物理检测：对被 hover 卡牌构造一个向世界 Z- 方向延伸的包围体进行额外判定
+			// 物理检测：额外做一个沿世界 Z- 方向位移的射线测试，直接针对被 hover 的卡牌 AABB
 			Ray ray = cam.ScreenPointToRay(Input.mousePosition);
 			var hits = Physics.RaycastAll(ray, 1000f);
 			if (hits == null || hits.Length == 0) return false;
@@ -29,26 +29,19 @@ namespace EndfieldFrontierTCG.Hand
 			if (float.IsPositiveInfinity(distHovered)) return false;
 			bool topMost = distHovered <= minDist + 1e-3f;
 			if (topMost) return true;
-			// 额外的“下延伸”检测：将该牌碰撞箱沿世界 Z- 方向扩展一段，仍算命中
+			// 额外的“下延伸”检测：在世界 Z- 方向平移一条射线再测试一次
 			var card = _cards != null && hoveredIndex >=0 && hoveredIndex < _cards.Length ? _cards[hoveredIndex] : null;
 			if (card == null) return false;
 			var col = card.GetComponentInChildren<Collider>(); if (col == null) return false;
-			Bounds b = col.bounds; b.Expand(new Vector3(0f, 0f, hoverExtendZBackward)); b.center += new Vector3(0f, 0f, -hoverExtendZBackward*0.5f);
-			// 用简单的 AABB-光线测试近似：如果射线与扩展后的包围盒相交，也认为在“下延伸区”
-			float tmin = 0f, tmax = 1000f;
-			for (int axis = 0; axis < 3; axis++)
+			Vector3 shift = new Vector3(0f, 0f, -hoverExtendZBackward);
+			Ray ray2 = new Ray(ray.origin + shift, ray.direction);
+			var hits2 = Physics.RaycastAll(ray2, 1000f);
+			for (int i=0;i<hits2.Length;i++)
 			{
-				float ro = axis==0?ray.origin.x:(axis==1?ray.origin.y:ray.origin.z);
-				float rd = axis==0?ray.direction.x:(axis==1?ray.direction.y:ray.direction.z);
-				float minA = axis==0?b.min.x:(axis==1?b.min.y:b.min.z);
-				float maxA = axis==0?b.max.x:(axis==1?b.max.y:b.max.z);
-				if (Mathf.Abs(rd) < 1e-6f) { if (ro < minA || ro > maxA) return false; }
-				else {
-					float t1 = (minA - ro) / rd; float t2 = (maxA - ro) / rd; if (t1>t2){var tmp=t1;t1=t2;t2=tmp;}
-					tmin = Mathf.Max(tmin, t1); tmax = Mathf.Min(tmax, t2); if (tmin>tmax) return false;
-				}
+				var cv = hits2[i].collider != null ? hits2[i].collider.GetComponentInParent<CardView3D>() : null;
+				if (cv != null && cv.handIndex == hoveredIndex) return true;
 			}
-			return true;
+			return false;
 		}
 
 		private bool TryGetCardScreenBounds(int index, out float minX, out float maxX, out float minY, out float maxY)
@@ -79,6 +72,63 @@ namespace EndfieldFrontierTCG.Hand
 				minY = Mathf.Min(minY, sp.y); maxY = Mathf.Max(maxY, sp.y);
 			}
 			return true;
+		}
+
+		// 仅用于“从下方进入”场景：允许在进入后的下边缘带宽内保持 hover
+		private bool IsWithinFromBelowBand(int index)
+		{
+			if (_cards == null || index < 0 || index >= _cards.Length) return false;
+			var cam = Camera.main; if (cam == null) return false;
+			if (!TryGetCardScreenBounds(index, out float minX, out float maxX, out float minYNow, out float maxYNow)) return false;
+			float minYEnter = minYNow;
+			if (_enterMinYByIndex != null && _enterMinYByIndex.TryGetValue(index, out float rec)) minYEnter = rec;
+			float bandTop = minYEnter + hoverBottomExtendPx + enterFromBelowSlackPx;
+			float mx = Input.mousePosition.x; float my = Input.mousePosition.y;
+			return (mx >= minX && mx <= maxX && my <= bandTop);
+		}
+
+		private int FindPseudoHoverIndex()
+		{
+			if (_cards == null || _cards.Length == 0) return -1;
+			var cam = Camera.main; if (cam == null) return -1;
+			Ray ray = cam.ScreenPointToRay(Input.mousePosition);
+			// 把鼠标指针投到手牌所在的 Y 平面上，得到一个世界点
+			float yPlane = transform.position.y;
+			Plane plane = new Plane(Vector3.up, new Vector3(0f, yPlane, 0f));
+			if (!plane.Raycast(ray, out float enter)) return -1;
+			Vector3 pt = ray.GetPoint(enter);
+			int best = -1; float bestZ = float.PositiveInfinity;
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				var c = _cards[i]; if (c == null) continue;
+				var col = c.GetComponentInChildren<Collider>(); if (col == null) continue;
+				Bounds b = col.bounds;
+				// X 在盒内，且指针 Z 小于卡牌底边 Z（即在其正下方）
+				float minX = b.min.x, maxX = b.max.x, minZ = b.min.z;
+				if (pt.x >= minX && pt.x <= maxX && pt.z < minZ)
+				{
+					// 选择距离最近的那张（minZ 与指针 Z 的差值最小）
+					float dz = (minZ - pt.z);
+					if (dz < bestZ) { bestZ = dz; best = c.handIndex; }
+				}
+			}
+			return best;
+		}
+
+		private bool IsInPseudoArea(int index)
+		{
+			if (_cards == null || index < 0 || index >= _cards.Length) return false;
+			var cam = Camera.main; if (cam == null) return false;
+			Ray ray = cam.ScreenPointToRay(Input.mousePosition);
+			float yPlane = transform.position.y;
+			Plane plane = new Plane(Vector3.up, new Vector3(0f, yPlane, 0f));
+			if (!plane.Raycast(ray, out float enter)) return false;
+			Vector3 pt = ray.GetPoint(enter);
+			var c = _cards[index]; if (c == null) return false;
+			var col = c.GetComponentInChildren<Collider>(); if (col == null) return false;
+			Bounds b = col.bounds;
+			float minX = b.min.x, maxX = b.max.x, minZ = b.min.z;
+			return (pt.x >= minX && pt.x <= maxX && pt.z < minZ);
 		}
 	}
 }

@@ -36,6 +36,10 @@ namespace EndfieldFrontierTCG.Hand
 		public float lineLocalY = 0f;
 		public float lineYawOffsetDeg = 90f;
 
+		[Header("Shadows")]
+		[Tooltip("为避免接触阴影被灯光偏移吃掉，给所有槽位抬升的微小高度（米）")]
+		public float shadowLiftY = 0.02f;
+
 		[Header("Card Rotation")]
 		[Tooltip("是否使用固定欧拉角作为卡牌基础朝向（避免被代码强制成难以修改的姿态）")]
 		public bool useFixedCardEuler = true;
@@ -79,6 +83,7 @@ namespace EndfieldFrontierTCG.Hand
 		private Coroutine _hoverCo;
 		private int _paramsHash = 0;
 		private readonly Dictionary<int, float> _enterMinYByIndex = new Dictionary<int, float>();
+		private bool _pseudoHover = false;
 		// Press/drag tracking
 		private bool _pressing = false;
 		private Vector2 _pressStartPos;
@@ -166,22 +171,95 @@ namespace EndfieldFrontierTCG.Hand
 				_hoverCo = StartCoroutine(RepositionByHover());
 			}
 
-			// 中央输入：独立的射线悬停与拖拽
-			UpdateHoverByRay();
+			// 中央输入：统一更新 hover（真/伪），再驱动拖拽
+			UpdateHoverUnified();
 			DriveDragByRay();
 
-			// 自主维持：若是“从下方进入”，只要未被前方物体遮挡并且射线能击中该牌，就保持 hover
+			// 自主维持：若是“从下方进入”，在下边缘保护带内保持 hover，即使当前几何判断略离开
 			if (_hoverIndex >= 0 && _hoverFromBelow)
 			{
-				if (!IsPointerOnTopOfCard(_hoverIndex))
-					_hoverIndex = -1; // 被遮挡或射线未击中 -> 结束
+				bool onTop = IsPointerOnTopOfCard(_hoverIndex);
+				bool inBand = false;
+				try { inBand = IsWithinFromBelowBand(_hoverIndex); } catch {}
+				if (!(onTop || inBand))
+				{
+					_hoverIndex = -1; _pseudoHover = false;
+				}
+			}
+			// 伪 hover：若光线没有命中但指针在卡牌碰撞箱正下方（世界 Z- 方向）且 X 在范围内，则将其视为 hover
+			if (_hoverIndex < 0)
+			{
+				int ph = FindPseudoHoverIndex();
+				if (ph >= 0)
+				{
+					_hoverIndex = ph; _pseudoHover = true; _hoverFromBelow = true;
+				}
+				else { _pseudoHover = false; }
+			}
+			else if (_pseudoHover)
+			{
+				if (!IsInPseudoArea(_hoverIndex) && !IsPointerOnTopOfCard(_hoverIndex))
+				{
+					_hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false;
+				}
 			}
 			// 拖拽时不允许 hover（被拖拽牌视为非 hover，其他牌也不触发 hover 动画）
-			if (_activeDragging) _hoverIndex = -1;
+			if (_activeDragging) { _hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false; }
 			// 兜底：若没有在按、没有拖，但仍然残留活动目标，则清理
 			if (!_pressing && !_activeDragging && _activePressed != null)
 			{
 				_activePressed = null;
+			}
+		}
+
+		private void UpdateHoverUnified()
+		{
+			if (_activeDragging) { _hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false; return; }
+			var cam = Camera.main; if (cam == null) return;
+			int newIdx = -1; bool fromBelow = false; bool pseudo = false;
+			// 1) 物理射线命中顶层
+			var ray = cam.ScreenPointToRay(Input.mousePosition);
+			var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
+			if (hits != null && hits.Length > 0)
+			{
+				CardView3D top = null; float topY = float.NegativeInfinity;
+				for (int i = 0; i < hits.Length; i++)
+				{
+					var cv = hits[i].collider != null ? hits[i].collider.GetComponentInParent<CardView3D>() : null;
+					if (cv == null || cv.IsReturningHome) continue;
+					float y = hits[i].collider.bounds.max.y;
+					if (y > topY) { topY = y; top = cv; }
+				}
+				if (top != null) { newIdx = top.handIndex; fromBelow = IsPointerFromBelow(top); }
+			}
+			// 2) 伪 hover 区域（卡牌正下方）
+			if (newIdx < 0)
+			{
+				int ph = FindPseudoHoverIndex();
+				if (ph >= 0) { newIdx = ph; fromBelow = true; pseudo = true; }
+			}
+			// 3) 屏幕保护带（从下方进入）
+			if (newIdx < 0 && _cards != null)
+			{
+				for (int i = 0; i < _cards.Length; i++)
+				{
+					if (IsWithinFromBelowBand(i)) { newIdx = i; fromBelow = true; break; }
+				}
+			}
+			if (newIdx != _hoverIndex)
+			{
+				_pseudoHover = pseudo; _hoverFromBelow = fromBelow; _hoverIndex = newIdx;
+				if (_hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length && _cards[_hoverIndex] != null)
+				{
+					try { _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(_cards[_hoverIndex]); } catch {}
+				}
+			}
+			else if (_pseudoHover)
+			{
+				if (_hoverIndex >= 0 && !IsInPseudoArea(_hoverIndex) && !IsPointerOnTopOfCard(_hoverIndex))
+				{
+					_hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false;
+				}
 			}
 		}
 
@@ -298,7 +376,32 @@ namespace EndfieldFrontierTCG.Hand
 			}
 			var ray = cam.ScreenPointToRay(Input.mousePosition);
 			var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
-			if (hits == null || hits.Length == 0) { if (_hoverIndex != -1 && debugLogs) Debug.Log("[HandSplineZone] hoverIndex=-1 (no hits)"); _hoverIndex = -1; return; }
+			if (hits == null || hits.Length == 0)
+			{
+				// 没有任何射线命中：允许“从下方首次进入”的屏幕带判定来启动 hover
+				int candidate = -1; float bestMinY = float.NegativeInfinity;
+				if (_cards != null)
+				{
+					for (int i = 0; i < _cards.Length; i++)
+					{
+						var c = _cards[i]; if (c == null) continue;
+						if (!IsWithinFromBelowBand(i)) continue;
+						// 选择屏幕下缘更靠上的那张（更接近指针）
+						if (TryGetCardScreenBounds(i, out _, out _, out float minYI, out _))
+						{
+							if (minYI > bestMinY) { bestMinY = minYI; candidate = i; }
+						}
+					}
+				}
+				if (candidate >= 0)
+				{
+					_hoverIndex = candidate; _hoverFromBelow = true;
+					try { _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(_cards[_hoverIndex]); } catch {}
+					return;
+				}
+				if (_hoverIndex != -1 && debugLogs) Debug.Log("[HandSplineZone] hoverIndex=-1 (no hits)");
+				_hoverIndex = -1; return;
+			}
 			CardView3D top = null; float topY = float.NegativeInfinity;
 			for (int i = 0; i < hits.Length; i++)
 			{
@@ -307,8 +410,8 @@ namespace EndfieldFrontierTCG.Hand
 				float y = hits[i].collider.bounds.max.y;
 				if (y > topY) { topY = y; top = cv; }
 			}
-			if (top == null) { if (_hoverIndex != -1 && debugLogs) Debug.Log("[HandSplineZone] hoverIndex=-1 (no top)"); _hoverIndex = -1; return; }
-			if (top.IsReturningHome) { return; }
+			if (top == null) { if (_hoverIndex != -1 && debugLogs) Debug.Log("[HandSplineZone] hoverIndex=-1 (no top)"); return; }
+			if (top.IsReturningHome) { _hoverIndex = -1; return; }
 			int newIdx = top.handIndex;
 			if (newIdx != _hoverIndex)
 			{
@@ -318,6 +421,14 @@ namespace EndfieldFrontierTCG.Hand
 					Debug.Log($"[HandSplineZone] hoverIndex { _hoverIndex } -> { newIdx } ({ n })");
 				}
 				_hoverIndex = newIdx; // 仅在变化时赋值，减少抖动
+				// 记录从下方进入的基线与标志
+				try
+				{
+					_hoverFromBelow = IsPointerFromBelow(top);
+					if (_hoverFromBelow)
+						_enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(top);
+				}
+				catch {}
 			}
 		}
 
@@ -435,6 +546,8 @@ namespace EndfieldFrontierTCG.Hand
 				for (int i = 0; i < _cards.Length; i++)
 				{
 					var c = _cards[i]; if (c == null) continue;
+					bool isHoveredNow = (i == _hoverIndex);
+					try { c.SetInfoVisible(isHoveredNow); c.ApplyHoverColliderExtend(isHoveredNow); } catch {}
 					if (c.IsReturningHome) continue;
 					// 被拖拽的牌：完全从自动布局中排除
 					if (_activeDragging && _draggingCard != null && c == _draggingCard) continue;
@@ -507,7 +620,7 @@ namespace EndfieldFrontierTCG.Hand
 			}
 			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
 			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
-			pos = pWorld + Vector3.up * offsetUp + fwdXZ * offsetForward;
+			pos = pWorld + Vector3.up * (offsetUp + shadowLiftY) + fwdXZ * offsetForward;
 			if (stackDepthByIndex && Camera.main != null && slots > 0)
 			{
 				int order = reverseDepthOrder ? (slots - 1 - index) : index;

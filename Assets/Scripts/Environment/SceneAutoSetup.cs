@@ -12,7 +12,7 @@ namespace EndfieldFrontierTCG.Environment
 		[Tooltip("是否强制将 TablePlane.SurfaceY 设为 tableY（每帧）。关闭后可在 Inspector 自由修改 SurfaceY")]
 		public bool enforceTableY = false;
 		public Transform preferLookTarget; // assign HandSplineZone transform if available
-		public Vector3 cameraPosition = new Vector3(0f, 5f, -4.5f);
+		public Vector3 cameraPosition = new Vector3(0f, 7.5f, -4.5f);
 		public Vector3 cameraEuler = new Vector3(15f, 0f, 0f);
 		public float cameraFov = 40f;
 		[Tooltip("是否持续锁定主相机的位置与朝向（默认不锁定）")]
@@ -28,7 +28,7 @@ namespace EndfieldFrontierTCG.Environment
 				if (cam != null)
 				{
 					var p = cam.transform.position;
-					cam.transform.position = new Vector3(p.x, 5f, p.z);
+					cam.transform.position = new Vector3(p.x, 7.5f, p.z);
 				}
 			}
 		}

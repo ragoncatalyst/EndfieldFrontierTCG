@@ -78,9 +78,19 @@ namespace EndfieldFrontierTCG.Environment
 				mat.mainTextureOffset = offset;
 			}
 
-			// 接受阴影，自己不投射
+			// 接受阴影，自己不投射（根据需要可改为 On）
 			_mr.receiveShadows = true;
 			_mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+			// 强化实时阴影设置，避免质量设置导致手牌接触阴影丢失
+			var sun = GameObject.FindObjectOfType<Light>(true);
+			if (sun != null && sun.type == LightType.Directional)
+			{
+				sun.shadows = LightShadows.Soft;
+				sun.shadowStrength = 0.8f;
+				sun.shadowBias = 0.02f;
+				sun.shadowNormalBias = 0.4f;
+				sun.shadowNearPlane = 0.2f;
+			}
 		}
 
 		private void FitSizeToCamera()

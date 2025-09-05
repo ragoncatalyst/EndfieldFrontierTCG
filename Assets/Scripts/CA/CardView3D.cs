@@ -72,6 +72,20 @@ public class CardView3D : MonoBehaviour
     [Tooltip("在二阶段归位时，沿相机方向的前置偏移（米），避免被相邻卡遮挡")] public float returnFrontBias = 0.05f;
     [Tooltip("二阶段期间临时提高排序顺序，避免被相邻卡挡住")] public int returnSortingBoost = 20;
 
+    [Header("Drag Visuals")]
+    [Tooltip("拖拽时朝向相机偏移的距离（米），避免与手牌同平面发生穿插")] public float dragFrontBias = 0.03f;
+    [Tooltip("拖拽时提升的排序顺序，适用于透明材质")] public int dragSortingBoost = 40;
+    [Header("Collision Elevation")]
+    [Tooltip("被阻挡时是否临时抬升 Y，避免卡到其他卡牌下方")] public bool elevateWhenBlocked = true;
+    [Tooltip("阻挡时抬升的最大高度（米）")] public float elevateMax = 0.12f;
+    [Tooltip("抬升上行速度（米/秒）")] public float elevateUpSpeed = 2.0f;
+    [Tooltip("回落速度（米/秒）")] public float elevateDownSpeed = 2.5f;
+    private float _elevateY = 0f;
+    [Tooltip("软碰撞修正的平滑时间（秒），越大越柔和")]
+    public float collisionSmoothTime = 0.06f;
+    private Vector3 _collisionAdjust = Vector3.zero;
+    private Vector3 _collisionAdjustVel = Vector3.zero;
+
     [Header("Return Curves")]
     [Tooltip("阶段1：水平 XZ 位移的速度曲线（0→1）")] public AnimationCurve returnPhase1XZCurve = new AnimationCurve(new Keyframe(0f,0f), new Keyframe(1f,1f));
     [Tooltip("阶段1：Y 回归的速度曲线（0→1）")] public AnimationCurve returnPhase1YCurve = new AnimationCurve(new Keyframe(0f,0f), new Keyframe(1f,1f));
@@ -115,6 +129,20 @@ public class CardView3D : MonoBehaviour
     private Renderer[] _allRenderers;
     private int[] _origSortingOrders;
     // 移除临时材质/排序强制逻辑，避免停顿与回撤
+
+    [Header("Hover Collider Extend")]
+    [Tooltip("当被 hover 时，沿本地 -Z 方向额外延伸的碰撞箱距离（米）")]
+    public float hoverColliderExtendZ = 0.06f;
+    private bool _boxExtended = false;
+    private Vector3 _boxOrigSize;
+    private Vector3 _boxOrigCenter;
+
+    [Header("Shadow Caster Helper")]
+    [Tooltip("为保证贴近桌面时也有阴影，添加一个仅投影的辅助 Quad")]
+    public bool addShadowCasterHelper = true;
+    public float shadowCasterZOffset = -0.001f;
+    public float shadowCasterScaleMul = 1.02f;
+    private Renderer _shadowCasterRenderer;
 
     [Header("Input Mode")] public bool suppressOnMouseHandlers = true; // 由 HandSplineZone 集中驱动时开启
     private bool _allowInternalInvoke = false; // 外部桥调用时临时打开
@@ -175,9 +203,13 @@ public class CardView3D : MonoBehaviour
             {
                 var r = _allRenderers[i];
                 _origSortingOrders[i] = r.sortingOrder;
+                // 启用投射阴影与接收阴影
+                try { r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On; r.receiveShadows = true; } catch {}
             }
         }
         if (debugHoverLogs) Debug.Log($"[CardView3D] Awake collider={(box!=null)} trigger={box?.isTrigger} layer={gameObject.layer} ({cardViewRevision})");
+
+        if (addShadowCasterHelper) EnsureShadowCaster();
     }
 
     private void Update()
@@ -213,6 +245,46 @@ public class CardView3D : MonoBehaviour
         {
             _allowInternalInvoke = true; OnMouseUp(); _allowInternalInvoke = false;
             _externalHolding = false;
+        }
+        if (_shadowCasterRenderer != null) UpdateShadowCasterSize();
+        // 拖拽静止帧也要做一次碰撞与抬升修正，避免停住仍穿模或卡在下方
+        if (_state == DragState.Dragging)
+        {
+            bool blocked;
+            Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out blocked);
+            if ((corr - transform.position).sqrMagnitude > 1e-8f)
+            {
+                transform.position = corr;
+            }
+            if (elevateWhenBlocked)
+            {
+                float up = elevateUpSpeed * Time.deltaTime;
+                float down = elevateDownSpeed * Time.deltaTime;
+                float planeY = dragPlaneY;
+                _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
+                Vector3 p = transform.position; p.y = planeY + _elevateY; transform.position = p;
+            }
+        }
+        if (_state == DragState.Dragging)
+        {
+            bool blocked;
+            Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out blocked);
+            _collisionAdjust = Vector3.SmoothDamp(_collisionAdjust, corr - transform.position, ref _collisionAdjustVel, Mathf.Max(0.01f, collisionSmoothTime));
+            if (_collisionAdjust.sqrMagnitude > 0f) transform.position += _collisionAdjust;
+            if (elevateWhenBlocked)
+            {
+                float up = elevateUpSpeed * Time.deltaTime;
+                float down = elevateDownSpeed * Time.deltaTime;
+                float planeY = dragPlaneY;
+                _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
+                Vector3 p = transform.position; p.y = planeY + _elevateY; transform.position = p;
+            }
+        }
+        if (_state == DragState.Dragging)
+        {
+            bool blocked2;
+            Vector3 corr2 = AdjustTargetForCollisions(transform.position, transform.position, out blocked2);
+            if ((corr2 - transform.position).sqrMagnitude > 1e-8f) transform.position = corr2;
         }
     }
 
@@ -429,6 +501,8 @@ public class CardView3D : MonoBehaviour
         if (NameText != null) NameText.gameObject.SetActive(false);
         if (HPText != null) HPText.gameObject.SetActive(false);
         if (ATKText != null) ATKText.gameObject.SetActive(false);
+        EnableShadows(true);
+        UpdateShadowCasterSize();
         if (debugHoverLogs) Debug.Log($"[CardView3D] Bind ok id={cardId} at {transform.position}");
     }
 
@@ -449,6 +523,7 @@ public class CardView3D : MonoBehaviour
         }
         if (debugHoverLogs) Debug.Log($"[CardView3D] HoverEnter idx={handIndex}");
         SetInfoVisible(true);
+        ApplyHoverColliderExtend(true);
     }
 
     private void OnMouseExit()
@@ -461,6 +536,7 @@ public class CardView3D : MonoBehaviour
         }
         if (debugHoverLogs) Debug.Log($"[CardView3D] HoverExit idx={handIndex}");
         SetInfoVisible(false);
+        ApplyHoverColliderExtend(false);
     }
 
     private void OnMouseDown()
@@ -494,13 +570,14 @@ public class CardView3D : MonoBehaviour
         _mouseDownPos = transform.position;
         if (debugHoverLogs) Debug.Log($"[CardView3D] DragStart idx={handIndex} pos={transform.position}");
         StartCoroutine(PickupLift());
+        BoostDragRendering(true);
     }
 
     private IEnumerator PickupLift()
     {
         float t = 0f, dur = 0.12f;
         Vector3 start = transform.position;
-        Vector3 end = new Vector3(start.x, dragPlaneY, start.z);
+        Vector3 end = new Vector3(start.x, dragPlaneY, start.z) + CameraForwardPlanar() * dragFrontBias;
         while (t < dur)
         {
             t += Time.deltaTime;
@@ -524,11 +601,23 @@ public class CardView3D : MonoBehaviour
                 _dragOffsetWS = transform.position - pt;
                 _dragOffsetInitialized = true;
             }
-            Vector3 target = pt + _dragOffsetWS;
+            Vector3 target = pt + _dragOffsetWS + CameraForwardPlanar() * dragFrontBias;
             target.y = planeY;
-            // 强跟随：拖拽时直接贴合到目标点，避免落在鼠标与初始位置的中间
-            transform.position = target;
-            _smoothVel = Vector3.zero;
+            // 在不使用物理力的情况下，基于 ComputePenetration 进行软碰撞修正，避免穿模；必要时临时抬升
+            bool blocked;
+            Vector3 corrT = AdjustTargetForCollisions(transform.position, target, out blocked);
+            Vector3 delta = corrT - target;
+            _collisionAdjust = Vector3.SmoothDamp(_collisionAdjust, delta, ref _collisionAdjustVel, Mathf.Max(0.01f, collisionSmoothTime));
+            target += _collisionAdjust;
+            if (elevateWhenBlocked)
+            {
+                float up = elevateUpSpeed * Time.deltaTime;
+                float down = elevateDownSpeed * Time.deltaTime;
+                _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
+                target.y = planeY + _elevateY;
+            }
+            // 恢复“轻微平滑延迟”的跟随：SmoothDamp 到目标
+            transform.position = Vector3.SmoothDamp(transform.position, target, ref _smoothVel, followDragSmooth);
             _dragFirstFrame = false;
 
             Vector3 inst = (target - _lastTarget);
@@ -554,6 +643,59 @@ public class CardView3D : MonoBehaviour
         }
     }
 
+    private Vector3 CameraForwardPlanar()
+    {
+        if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
+        Vector3 f = _cam != null ? _cam.transform.forward : Vector3.forward;
+        f.y = 0f; if (f.sqrMagnitude < 1e-6f) f = Vector3.forward; return f.normalized;
+    }
+
+    private void BoostDragRendering(bool enable)
+    {
+        if (_allRenderers == null || _allRenderers.Length == 0) _allRenderers = GetComponentsInChildren<Renderer>(true);
+        if (_allRenderers == null) return;
+        for (int i = 0; i < _allRenderers.Length; i++)
+        {
+            var r = _allRenderers[i]; if (r == null) continue;
+            try
+            {
+                r.sortingOrder = enable ? (_origSortingOrders != null && i < _origSortingOrders.Length ? _origSortingOrders[i] + dragSortingBoost : r.sortingOrder + dragSortingBoost)
+                                        : (_origSortingOrders != null && i < _origSortingOrders.Length ? _origSortingOrders[i] : r.sortingOrder);
+            } catch {}
+        }
+    }
+
+    // 软碰撞：用 Physics.ComputePenetration 对目标点做位移修正，避免与其它卡片/桌面穿模
+    private Vector3 AdjustTargetForCollisions(Vector3 current, Vector3 target, out bool blocked)
+    {
+        blocked = false;
+        if (box == null) return target;
+        Vector3 corrected = target;
+        Vector3 halfExt = box.size * 0.5f * 1.02f;
+        Quaternion rot = transform.rotation;
+        for (int iter = 0; iter < 2; iter++)
+        {
+            Collider[] overlap = Physics.OverlapBox(corrected + rot * box.center, halfExt, rot, interactLayerMask, QueryTriggerInteraction.Ignore);
+            bool any = false;
+            for (int i = 0; i < overlap.Length; i++)
+            {
+                var other = overlap[i]; if (other == null) continue; if (other.transform == transform) continue;
+                Vector3 dir; float dist;
+                if (Physics.ComputePenetration(box, corrected, rot, other, other.transform.position, other.transform.rotation, out dir, out dist) && dist > 0f)
+                {
+                    // 只允许 Y+ 分离（绝不沿 X/Z 顶开）
+                    Vector3 prefer = new Vector3(0f, Mathf.Max(0f, dir.y), 0f);
+                    if (prefer.sqrMagnitude < 1e-8f) prefer = Vector3.up; // 兜底：至少向上分离
+                    corrected += prefer.normalized * dist;
+                    any = true;
+                    blocked = true;
+                }
+            }
+            if (!any) break;
+        }
+        return corrected;
+    }
+
     private void OnMouseUp()
     {
         if (suppressOnMouseHandlers && !_allowInternalInvoke) return;
@@ -569,6 +711,7 @@ public class CardView3D : MonoBehaviour
             return;
         }
         _state = DragState.Releasing;
+        BoostDragRendering(false);
         if (_fadeCo != null) StopCoroutine(_fadeCo);
         StartCoroutine(FadeTilt(0f, wobbleEaseOut));
         if (_wobbleCo != null) { StopCoroutine(_wobbleCo); _wobbleCo = null; }
@@ -818,14 +961,114 @@ public class CardView3D : MonoBehaviour
             box.enabled = true;
             box.isTrigger = false;
             box.gameObject.layer = LayerMask.NameToLayer("Default");
+            // 恢复碰撞箱
+            if (_boxExtended)
+            {
+                box.size = _boxOrigSize;
+                box.center = _boxOrigCenter;
+                _boxExtended = false;
+            }
         }
         gameObject.layer = LayerMask.NameToLayer("Default");
         // 确保始终可被射线命中（即使有父物体临时禁用）
         var rends = GetComponentsInChildren<Renderer>(true);
         for (int i = 0; i < rends.Length; i++) if (rends[i] != null) rends[i].enabled = true;
+        EnableShadows(true);
         // 让 HandSplineZone 重新感知状态（避免遗留 hover/return 标记）
         var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>(true);
         foreach (var z in zones) { try { z.NotifyHover(this, false); } catch { } }
         if (debugHoverLogs) Debug.Log($"[CardView3D] Reset OK (id={cardId}) ready");
+    }
+
+    public void EnableShadows(bool enable)
+    {
+        if (_allRenderers == null || _allRenderers.Length == 0) _allRenderers = GetComponentsInChildren<Renderer>(true);
+        if (_allRenderers == null) return;
+        for (int i = 0; i < _allRenderers.Length; i++)
+        {
+            var r = _allRenderers[i]; if (r == null) continue;
+            try {
+                r.enabled = true;
+                r.receiveShadows = enable;
+                r.shadowCastingMode = enable ? UnityEngine.Rendering.ShadowCastingMode.On : UnityEngine.Rendering.ShadowCastingMode.Off;
+                r.lightProbeUsage = UnityEngine.Rendering.LightProbeUsage.BlendProbes;
+                r.reflectionProbeUsage = UnityEngine.Rendering.ReflectionProbeUsage.BlendProbes;
+            } catch {}
+        }
+        EnsureShadowCaster();
+        UpdateShadowCasterSize();
+    }
+
+    private void EnsureShadowCaster()
+    {
+        try
+        {
+            if (_shadowCasterRenderer != null) return;
+            // 创建一个仅投影的 Quad 作为子物体
+            var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            go.name = "ShadowCasterHelper";
+            go.transform.SetParent(transform, false);
+            go.transform.localPosition = new Vector3(0f, 0f, shadowCasterZOffset);
+            go.transform.localRotation = Quaternion.identity; // 与卡牌同向
+            go.transform.localScale = Vector3.one;
+            var mr = go.GetComponent<MeshRenderer>();
+            if (mr != null)
+            {
+                mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.ShadowsOnly;
+                mr.receiveShadows = false;
+                _shadowCasterRenderer = mr;
+            }
+            var col = go.GetComponent<Collider>(); if (col != null) GameObject.Destroy(col);
+            UpdateShadowCasterSize();
+        }
+        catch {}
+    }
+
+    private void UpdateShadowCasterSize()
+    {
+        if (_shadowCasterRenderer == null) return;
+        float sx = 1f, sy = 1f;
+        if (box != null)
+        {
+            // 取局部盒子的最大两个轴作为卡面的宽高（更鲁棒，适配 5:8）
+            Vector3 s = box.size;
+            // 找到最大和次大
+            float a = s.x, b = s.y, c = s.z;
+            float max = Mathf.Max(a, Mathf.Max(b, c));
+            float mid = (a + b + c) - max - Mathf.Min(a, Mathf.Min(b, c));
+            // 以较大为“高”、次大为“宽”，更接近 5:8 的卡面比例
+            sy = Mathf.Max(0.01f, max) * shadowCasterScaleMul;
+            sx = Mathf.Max(0.01f, mid) * shadowCasterScaleMul;
+        }
+        else if (MainRenderer != null)
+        {
+            var b = MainRenderer.bounds; sx = Mathf.Max(0.01f, b.size.x) * shadowCasterScaleMul; sy = Mathf.Max(0.01f, b.size.y) * shadowCasterScaleMul;
+        }
+        var t = _shadowCasterRenderer.transform;
+        t.localScale = new Vector3(sx, sy, 1f);
+        t.localPosition = new Vector3(0f, 0f, shadowCasterZOffset);
+    }
+
+    public void ApplyHoverColliderExtend(bool enable)
+    {
+        if (box == null) return;
+        if (enable)
+        {
+            if (!_boxExtended)
+            {
+                _boxOrigSize = box.size;
+                _boxOrigCenter = box.center;
+            }
+            float ext = Mathf.Max(0f, hoverColliderExtendZ);
+            box.size = new Vector3(_boxOrigSize.x, _boxOrigSize.y, _boxOrigSize.z + ext);
+            box.center = new Vector3(_boxOrigCenter.x, _boxOrigCenter.y, _boxOrigCenter.z - ext * 0.5f);
+            _boxExtended = true;
+        }
+        else if (_boxExtended)
+        {
+            box.size = _boxOrigSize;
+            box.center = _boxOrigCenter;
+            _boxExtended = false;
+        }
     }
 }
