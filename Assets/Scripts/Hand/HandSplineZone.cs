@@ -1,6 +1,7 @@
 using UnityEngine;
 using EndfieldFrontierTCG.CA;
 using EndfieldFrontierTCG.Environment;
+using EndfieldFrontierTCG.Board;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -433,12 +434,68 @@ namespace EndfieldFrontierTCG.Hand
 			}
 		}
 
-		public void RegisterCards(CardView3D[] cards)
-		{
-			_cards = cards ?? new CardView3D[0];
-			for (int i = 0; i < _cards.Length; i++) if (_cards[i] != null) _cards[i].handIndex = i;
-			ForceRelayoutExistingCards();
-		}
+        public void RegisterCards(CardView3D[] cards)
+        {
+            _cards = cards ?? new CardView3D[0];
+            for (int i = 0; i < _cards.Length; i++) if (_cards[i] != null) _cards[i].handIndex = i;
+            ForceRelayoutExistingCards();
+        }
+
+        public void UnregisterCard(CardView3D card)
+        {
+            if (card == null) return;
+            
+            // 从卡牌数组中移除
+            if (_cards != null)
+            {
+                var newCards = new List<CardView3D>();
+                for (int i = 0; i < _cards.Length; i++)
+                {
+                    if (_cards[i] != null && _cards[i] != card)
+                    {
+                        newCards.Add(_cards[i]);
+                    }
+                }
+                _cards = newCards.ToArray();
+            }
+            
+            // 清理卡牌的手牌相关状态
+            if (card.handIndex >= 0)
+            {
+                card.handIndex = -1;
+                card.slotIndex = -1;
+            }
+            
+            // 如果这张卡是当前悬停的卡，清除悬停状态
+            if (_hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length && _cards[_hoverIndex] == card)
+            {
+                _hoverIndex = -1;
+                _hoverFromBelow = false;
+                _pseudoHover = false;
+            }
+            
+            // 如果这张卡是当前按下的卡，清除按下状态
+            if (_activePressed == card)
+            {
+                _activePressed = null;
+                _pressing = false;
+                _activeDragging = false;
+            }
+            
+            // 如果这张卡是当前拖拽的卡，清除拖拽状态
+            if (_draggingCard == card)
+            {
+                _draggingCard = null;
+                _draggingSlot = -1;
+                _compactOnDrag = false;
+            }
+            
+            // 从压缩映射中移除
+            _origSlotIndex.Remove(card);
+            _compactAssignedSlot.Remove(card);
+            
+            Debug.Log($"[HandSplineZone] 卡牌已从手牌区域注销: {card.name}");
+        }
 
 		public void ForceRelayoutExistingCards()
 		{
@@ -680,12 +737,22 @@ namespace EndfieldFrontierTCG.Hand
 			return true;
 		}
 
-		public bool TryReturnCardToHome(CardView3D card)
-		{
-			if (card == null) return false;
-			if (!card.IsDragging) card.BeginSmoothReturnToHome(returnAheadZ, returnPhase1, returnPhase2);
-			return true;
-		}
+        public bool TryReturnCardToHome(CardView3D card)
+        {
+            if (card == null) return false;
+            
+            // 检查卡牌是否已经被放置到槽位中
+            var cardSlot = card.transform.parent?.GetComponent<CardSlotBehaviour>();
+            if (cardSlot != null)
+            {
+                // 如果卡牌已经在槽位中，不要让它返回手牌
+                Debug.Log($"[HandSplineZone] 卡牌已在槽位中，不返回手牌: {card.name}");
+                return false;
+            }
+
+            if (!card.IsDragging) card.BeginSmoothReturnToHome(returnAheadZ, returnPhase1, returnPhase2);
+            return true;
+        }
 
 		public bool TrySnap(CardView3D card)
 		{

@@ -99,7 +99,8 @@ namespace EndfieldFrontierTCG.Board
                 
                 // 使用卡牌的 SnapTo 方法来设置位置和旋转
                 Vector3 targetPos = transform.position;
-                Quaternion targetRot = transform.rotation * Quaternion.Euler(90f, 0f, 0f); // 调整为卡牌的正确朝向
+                Quaternion targetRot = transform.rotation * Quaternion.Euler(-90f, 0f, 0f); // 调整为卡牌的正确朝向
+                Debug.Log($"[CardSlotBehaviour] 设置卡牌旋转: {targetRot.eulerAngles}");
                 card.SnapTo(targetPos, targetRot);
                 
                 // 确保卡牌的状态正确
@@ -161,7 +162,10 @@ namespace EndfieldFrontierTCG.Board
         public Quaternion GetCardRotation()
         {
             // 返回卡牌应该旋转到的精确角度
-            return transform.rotation * Quaternion.Euler(90f, 0f, 0f);
+            // 1. 旋转-90度让卡牌平放并正面朝上
+            // 2. 不需要Y轴旋转，保持卡牌正面朝向摄像机
+            // 3. 最后根据槽位的朝向旋转
+            return transform.rotation * Quaternion.Euler(-90f, 0f, 0f);
         }
 
         public void OnHoverEnter()

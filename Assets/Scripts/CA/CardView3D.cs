@@ -184,7 +184,7 @@ public class CardView3D : MonoBehaviour
         if (box == null) box = GetComponent<BoxCollider>();
         if (box == null) box = GetComponentInChildren<BoxCollider>(true);
         createId = s_nextCreateId++;
-        _baseRot = Quaternion.Euler(90f, 0f, 0f);
+        _baseRot = transform.rotation; // 使用当前旋转作为基准
         if (body != null)
         {
             body.useGravity = false;
@@ -573,6 +573,21 @@ public class CardView3D : MonoBehaviour
         _mouseDownTime = Time.unscaledTime;
         _mouseDownPos = transform.position;
         if (debugHoverLogs) Debug.Log($"[CardView3D] DragStart idx={handIndex} pos={transform.position}");
+        
+        // 确保所有渲染器都是启用的
+        if (_allRenderers != null)
+        {
+            foreach (var renderer in _allRenderers)
+            {
+                if (renderer != null)
+                {
+                    renderer.enabled = true;
+                    // 提升渲染顺序，确保在拖动时可见
+                    renderer.sortingOrder += dragSortingBoost;
+                }
+            }
+        }
+        
         StartCoroutine(PickupLift());
         BoostDragRendering(true);
     }
@@ -663,8 +678,34 @@ public class CardView3D : MonoBehaviour
             var r = _allRenderers[i]; if (r == null) continue;
             try
             {
-                r.sortingOrder = enable ? (_origSortingOrders != null && i < _origSortingOrders.Length ? _origSortingOrders[i] + dragSortingBoost : r.sortingOrder + dragSortingBoost)
-                                        : (_origSortingOrders != null && i < _origSortingOrders.Length ? _origSortingOrders[i] : r.sortingOrder);
+                // 确保渲染器启用
+                r.enabled = true;
+                
+                // 更新排序顺序
+                if (enable)
+                {
+                    // 保存原始排序顺序
+                    if (_origSortingOrders == null || _origSortingOrders.Length != _allRenderers.Length)
+                    {
+                        _origSortingOrders = new int[_allRenderers.Length];
+                    }
+                    _origSortingOrders[i] = r.sortingOrder;
+                    
+                    // 提升排序顺序
+                    r.sortingOrder += dragSortingBoost;
+                }
+                else
+                {
+                    // 恢复原始排序顺序
+                    if (_origSortingOrders != null && i < _origSortingOrders.Length)
+                    {
+                        r.sortingOrder = _origSortingOrders[i];
+                    }
+                }
+                
+                // 确保阴影设置正确
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+                r.receiveShadows = true;
             } catch {}
         }
     }
@@ -751,6 +792,23 @@ public class CardView3D : MonoBehaviour
             if (nearestSlot != null)
             {
                 Debug.Log($"[CardView3D] 找到最近的槽位: {nearestSlot.name}, 距离: {nearestDistance}");
+                
+                // 断开与所有手牌区域的联系
+                var allHandZones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
+                foreach (var handZone in allHandZones)
+                {
+                    if (handZone != null)
+                    {
+                        handZone.ClearInputState();
+                        handZone.UnregisterCard(this); // 从手牌区域注销这张卡
+                    }
+                }
+                
+                // 确保不会被手牌区域重新认领
+                transform.SetParent(null);
+                _homeSet = false;
+                handIndex = -1; // 清除手牌索引
+                
                 StartCoroutine(SmoothMoveToSlot(nearestSlot));
                 return;
             }
@@ -759,7 +817,7 @@ public class CardView3D : MonoBehaviour
             var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
             if (zone == null)
             {
-                var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>(true);
+                var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
                 float best2 = float.MaxValue;
                 EndfieldFrontierTCG.Hand.HandSplineZone bestZ = null;
                 foreach (var z in zones)
@@ -773,7 +831,12 @@ public class CardView3D : MonoBehaviour
 
             if (zone != null && _homeSet)
             {
-                zone.TryReturnCardToHome(this);
+                // 检查是否已经在槽位中
+                var currentSlot = GetComponentInParent<CardSlotBehaviour>();
+                if (currentSlot == null)
+                {
+                    zone.TryReturnCardToHome(this);
+                }
                 return;
             }
 
@@ -815,36 +878,60 @@ public class CardView3D : MonoBehaviour
                     body.detectCollisions = false;
                 }
                 
-                float moveTime = 0.25f; // 稍微加快一点移动时间
+                // 计算移动参数
+                float distance = Vector3.Distance(startPos, targetPos);
+                float moveTime = Mathf.Lerp(0.15f, 0.3f, distance / 2f); // 距离越远，时间越长
                 float t = 0;
                 Vector3 currentVelocity = Vector3.zero;
                 
                 // 提前设置父物体，确保在正确的空间中移动
                 transform.SetParent(slot.transform.parent, true);
+
+                // 计算抛物线参数
+                float height = Mathf.Min(0.5f, distance * 0.25f); // 高度随距离变化，但有上限
+                Vector3 midPoint = (startPos + targetPos) * 0.5f + Vector3.up * height;
                 
                 while (t < moveTime)
                 {
                     t += Time.deltaTime;
                     float progress = t / moveTime;
                     
-                    // 使用 SmoothDamp 实现平滑移动，但确保最后一段距离更快
-                    float smoothTime = Mathf.Lerp(0.1f, 0.01f, progress);
+                    // 使用贝塞尔曲线实现抛物线运动
+                    float oneMinusT = 1f - progress;
+                    Vector3 position = oneMinusT * oneMinusT * startPos +
+                                     2f * oneMinusT * progress * midPoint +
+                                     progress * progress * targetPos;
+
+                    // 添加一些随机摇晃
+                    if (progress < 0.8f) // 在接近终点时减少摇晃
+                    {
+                        float shake = Mathf.Sin(progress * 15f) * (1f - progress) * 0.05f;
+                        position += new Vector3(shake, 0, shake);
+                    }
+
+                    // 使用 SmoothDamp 平滑跟随计算出的位置
                     transform.position = Vector3.SmoothDamp(
                         transform.position, 
-                        targetPos, 
+                        position, 
                         ref currentVelocity, 
-                        smoothTime
+                        0.05f
                     );
                     
-                    // 使用 Slerp 实现平滑旋转，但在接近目标时加速
-                    float rotProgress = Mathf.SmoothStep(0, 1, progress);
-                    transform.rotation = Quaternion.Slerp(startRot, targetRot, rotProgress);
-                    
-                    // 检查是否足够接近目标
-                    if (Vector3.Distance(transform.position, targetPos) < 0.001f &&
-                        Quaternion.Angle(transform.rotation, targetRot) < 0.1f)
+                    // 根据移动方向动态调整旋转
+                    Vector3 moveDirection = (position - transform.position).normalized;
+                    if (moveDirection.sqrMagnitude > 0.01f)
                     {
-                        break;
+                        float tiltAmount = Mathf.Lerp(15f, 0f, progress); // 随着接近目标减少倾斜
+                        Quaternion tiltRotation = Quaternion.FromToRotation(Vector3.up, Vector3.up + moveDirection * 0.5f);
+                        Quaternion targetRotWithTilt = tiltRotation * targetRot;
+                        transform.rotation = Quaternion.Slerp(transform.rotation, targetRotWithTilt, Time.deltaTime * 15f);
+                    }
+                    
+                    // 接近终点时的额外处理
+                    if (progress > 0.8f)
+                    {
+                        float finalProgress = (progress - 0.8f) / 0.2f;
+                        transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, finalProgress);
                     }
                     
                     yield return null;
@@ -862,13 +949,36 @@ public class CardView3D : MonoBehaviour
                 {
                     Debug.Log($"[CardView3D] 成功放置到槽位: {slot.name}");
                     _state = DragState.Idle;
+                    _homeSet = false; // 确保不会被手牌区域重新认领
                     
-                    // 通知手牌区域移除
-                    var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-                    if (handZone != null)
+                    // 断开与所有手牌区域的联系
+                    var allHandZones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
+                    foreach (var handZone in allHandZones)
                     {
-                        handZone.ClearInputState();
+                        if (handZone != null)
+                        {
+                            handZone.ClearInputState();
+                            // 如果这个卡牌在这个手牌区域中，移除它
+                            if (handZone.transform == transform.parent)
+                            {
+                                transform.SetParent(slot.transform);
+                            }
+                        }
                     }
+
+                    // 强制设置父物体为槽位
+                    transform.SetParent(slot.transform, true);
+                    
+                    // 禁用碰撞和物理，防止意外移动
+                    if (body != null)
+                    {
+                        body.isKinematic = true;
+                        body.detectCollisions = false;
+                        body.constraints = RigidbodyConstraints.FreezeAll;
+                    }
+                    
+                    // 更新卡牌的家位置为槽位
+                    SetHomePose(targetPos, targetRot);
                 }
                 else
                 {
@@ -895,30 +1005,51 @@ public class CardView3D : MonoBehaviour
     {
         Vector3 vPlanar = Vector3.ProjectOnPlane(velocity, Vector3.up);
         float vMag = vPlanar.magnitude;
-        Quaternion followRot = _baseRot;
+        
+        // 保持当前旋转，让倾斜效果基于当前旋转计算
+        
         if (vMag > 1e-4f)
         {
-            Vector3 axis = Vector3.Cross(Vector3.up, vPlanar).normalized;
+            // 计算移动方向在世界空间中的向量
+            Vector3 moveDir = vPlanar.normalized;
+            
+            // 计算倾斜轴：使用世界空间的右方向作为参考
+            Vector3 axis = Vector3.Cross(moveDir, Vector3.up).normalized;
+            
             float boostK = 1f;
             if (_startBoostT > 0f)
             {
                 boostK = Mathf.Lerp(1f, startBoostMul, _startBoostT / Mathf.Max(0.0001f, startBoostTime));
                 _startBoostT = Mathf.Max(0f, _startBoostT - Time.deltaTime);
             }
-            float ang = Mathf.Clamp(vMag * followLeanSpeedScale * boostK, 0f, followLeanMaxDeg);
-            // 统一为“乘风而起”：风从下方掠过，速度方向那一侧被抬起
-            followRot = Quaternion.AngleAxis(-ang, axis) * _baseRot;
+
+            // 计算倾斜角度（保持较小的角度以避免翻转）
+            float ang = Mathf.Clamp(vMag * followLeanSpeedScale * boostK, 0f, followLeanMaxDeg * 0.5f);
+            
+            // 先应用基准旋转，再应用倾斜
+            Quaternion followRot = _baseRot * Quaternion.AngleAxis(ang, axis);
+
+            // 添加调试日志
+            if (debugHoverLogs)
+            {
+                Debug.Log($"[CardView3D] 倾斜角度: {ang}, 速度: {vMag}, 轴: {axis}, 旋转: {followRot.eulerAngles}");
+            }
+
+            // 确保旋转不会导致卡牌翻转
+            followRot = SoftLimitToBaseRotation(followRot);
+            
+            // 指数平滑过渡
+            float alpha = 1f - Mathf.Exp(-followLeanResponsiveness * Time.deltaTime);
+            transform.rotation = Quaternion.Slerp(transform.rotation, followRot, alpha);
         }
-        // 仅脚本驱动旋转；避免写入刚体的速度（kinematic 提示）
+
+        // 仅脚本驱动旋转；避免写入刚体的速度
         if (body != null && !body.isKinematic)
         {
             body.isKinematic = true;
             body.useGravity = false;
         }
-        followRot = SoftLimitToBaseRotation(followRot);
-        // 指数平滑（避免线性插值在大 dt 时产生机械感）
-        float alpha = 1f - Mathf.Exp(-followLeanResponsiveness * Time.deltaTime);
-        transform.rotation = Quaternion.Slerp(transform.rotation, followRot, alpha);
+        
         // 拖拽中不做额外抬升，避免改变跟随平面的 y（造成鼠标与物体错位）
         if (_state != DragState.Dragging)
         {
