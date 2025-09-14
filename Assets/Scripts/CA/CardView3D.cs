@@ -30,7 +30,7 @@ public class CardView3D : MonoBehaviour
     [HideInInspector] public int cardId = -1;    // 绑定的数据ID
 
     [Header("Heights")]
-    public float dragPlaneY = 0.75f;
+    public float dragPlaneY = 0.35f; // 降低拖动高度，避免太高
     public float groundY = 0f;
 
     [Header("Follow (Leaf)")]
@@ -880,7 +880,7 @@ public class CardView3D : MonoBehaviour
                 
                 // 计算移动参数
                 float distance = Vector3.Distance(startPos, targetPos);
-                float moveTime = Mathf.Lerp(0.15f, 0.3f, distance / 2f); // 距离越远，时间越长
+                float moveTime = Mathf.Lerp(0.2f, 0.4f, distance / 2f); // 增加时间，让动画更平滑
                 float t = 0;
                 Vector3 currentVelocity = Vector3.zero;
                 
@@ -888,8 +888,14 @@ public class CardView3D : MonoBehaviour
                 transform.SetParent(slot.transform.parent, true);
 
                 // 计算抛物线参数
-                float height = Mathf.Min(0.5f, distance * 0.25f); // 高度随距离变化，但有上限
-                Vector3 midPoint = (startPos + targetPos) * 0.5f + Vector3.up * height;
+                float height = Mathf.Min(0.2f, distance * 0.15f); // 降低抛物线高度
+                // 确保中点的Y坐标高于起点和终点
+                float midY = Mathf.Max(startPos.y, targetPos.y) + height;
+                Vector3 midPoint = new Vector3(
+                    (startPos.x + targetPos.x) * 0.5f,
+                    midY,
+                    (startPos.z + targetPos.z) * 0.5f
+                );
                 
                 while (t < moveTime)
                 {
