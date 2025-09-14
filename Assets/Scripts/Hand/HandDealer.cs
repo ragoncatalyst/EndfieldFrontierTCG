@@ -49,16 +49,20 @@ namespace EndfieldFrontierTCG.Hand
                 Debug.LogError("HandDealer: no HandSplineZone in scene");
                 yield break;
             }
-            // 将手牌区域移动到相机正前方，确保初始在视野中央
-            var cam = Camera.main;
-            if (cam != null)
+            // 只有当目标是HandSplineZone时才设置位置
+            if (_activeZone.GetType() == typeof(HandSplineZone))
             {
-                Vector3 basePos = cam.transform.position + cam.transform.forward * handDistanceFromCamera;
-                basePos.y = handZoneY;
-                _activeZone.transform.position = basePos;
-                // 让手牌区域的朝向与相机水平一致，便于展开在屏幕左右
-                var e = _activeZone.transform.eulerAngles; e.y = cam.transform.eulerAngles.y; e.x = 0f; e.z = 0f;
-                _activeZone.transform.eulerAngles = e;
+                // 将手牌区域移动到相机正前方，确保初始在视野中央
+                var cam = Camera.main;
+                if (cam != null)
+                {
+                    Vector3 basePos = cam.transform.position + cam.transform.forward * handDistanceFromCamera;
+                    basePos.y = handZoneY;
+                    _activeZone.transform.position = basePos;
+                    // 让手牌区域的朝向与相机水平一致，便于展开在屏幕左右
+                    var e = _activeZone.transform.eulerAngles; e.y = cam.transform.eulerAngles.y; e.x = 0f; e.z = 0f;
+                    _activeZone.transform.eulerAngles = e;
+                }
             }
             _activeZone.slots = Mathf.Max(3, _activeZone.slots);
             if (clearBeforeDeal)

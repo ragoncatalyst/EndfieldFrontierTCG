@@ -2,6 +2,7 @@ using System.Collections;
 using UnityEngine;
 using TMPro;
 using EndfieldFrontierTCG.CA;
+using EndfieldFrontierTCG.Board;
 
 // CardView3D (clean rewrite)
 // - Leaf-in-water follow: position SmoothDamp + rotation leaning into motion
@@ -699,63 +700,129 @@ public class CardView3D : MonoBehaviour
         return corrected;
     }
 
-    private void OnMouseUp()
-    {
-        if (suppressOnMouseHandlers && !_allowInternalInvoke) return;
-        if (_state == DragState.Idle) return;
-        // 点击过滤：按下时间短且位移极小 -> 直接复位，不触发回家/下落流程
-        float held = Time.unscaledTime - _mouseDownTime;
-        float moved = Vector3.Distance(transform.position, _mouseDownPos);
-        if (_state == DragState.Picking || (held <= clickMaxDuration && moved <= clickMaxDistance))
+        private void OnMouseUp()
         {
-            InitializeForNextDrag();
-            var zone0 = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-            if (zone0 != null) { try { zone0.ClearInputState(); } catch {} }
-            return;
-        }
-        _state = DragState.Releasing;
-        BoostDragRendering(false);
-        if (_fadeCo != null) StopCoroutine(_fadeCo);
-        StartCoroutine(FadeTilt(0f, wobbleEaseOut));
-        if (_wobbleCo != null) { StopCoroutine(_wobbleCo); _wobbleCo = null; }
-        // 不切换到 kinematic，避免物理状态切换造成末尾突跳。改为在回家协程内部临时冻结
-        // 若该牌属于某个 HandSplineZone（已设置 homePose），优先按两阶段“回手牌”路径归位
-        var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-        // 优先尝试吸附到棋盘槽位
-        var unitMgr = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Board.SlotGridManager>(true);
-        EndfieldFrontierTCG.Board.SlotGridManager bestMgr = null; EndfieldFrontierTCG.Board.SlotBehaviour bestSlot = null; float best = float.PositiveInfinity;
-        for (int i = 0; i < unitMgr.Length; i++)
-        {
-            var s = unitMgr[i]?.GetNearestFreeSlot(transform.position); if (s == null) continue;
-            float d = Vector3.SqrMagnitude(s.transform.position - transform.position);
-            if (d < best) { best = d; bestMgr = unitMgr[i]; bestSlot = s; }
-        }
-        if (bestSlot != null)
-        {
-            bestSlot.Attach(this, returnFrontBias, snapReturnPhase1, snapReturnPhase2);
-            return;
-        }
-        if (zone == null)
-        {
-            var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>(true);
-            float best2 = float.MaxValue; EndfieldFrontierTCG.Hand.HandSplineZone bestZ = null;
-            foreach (var z in zones)
+            if (suppressOnMouseHandlers && !_allowInternalInvoke) return;
+            if (_state == DragState.Idle) return;
+
+            // 点击过滤：按下时间短且位移极小 -> 直接复位，不触发回家/下落流程
+            float held = Time.unscaledTime - _mouseDownTime;
+            float moved = Vector3.Distance(transform.position, _mouseDownPos);
+            if (_state == DragState.Picking || (held <= clickMaxDuration && moved <= clickMaxDistance))
             {
-                if (z == null) continue;
-                float d = (transform.position - z.transform.position).sqrMagnitude;
-                if (d < best2) { best2 = d; bestZ = z; }
+                InitializeForNextDrag();
+                var zone0 = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+                if (zone0 != null) { try { zone0.ClearInputState(); } catch {} }
+                return;
             }
-            zone = bestZ;
+
+            _state = DragState.Releasing;
+            BoostDragRendering(false);
+            if (_fadeCo != null) StopCoroutine(_fadeCo);
+            StartCoroutine(FadeTilt(0f, wobbleEaseOut));
+            if (_wobbleCo != null) { StopCoroutine(_wobbleCo); _wobbleCo = null; }
+
+            // 使用射线检测所有可能的槽位
+            var ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
+            
+            // 找到最近的可用槽位
+            CardSlotBehaviour nearestSlot = null;
+            float nearestDistance = float.MaxValue;
+            Vector3 mouseWorldPos = Vector3.zero;
+
+            foreach (var hit in hits)
+            {
+                // 检查是否击中了槽位
+                var slot = hit.collider.GetComponent<CardSlotBehaviour>();
+                if (slot != null)
+                {
+                    float distance = Vector3.Distance(transform.position, slot.transform.position);
+                    if (distance < nearestDistance)
+                    {
+                        nearestDistance = distance;
+                        nearestSlot = slot;
+                        mouseWorldPos = hit.point;
+                    }
+                }
+            }
+
+            // 如果找到了槽位，平滑移动过去
+            if (nearestSlot != null)
+            {
+                Debug.Log($"[CardView3D] 找到最近的槽位: {nearestSlot.name}, 距离: {nearestDistance}");
+                StartCoroutine(SmoothMoveToSlot(nearestSlot));
+                return;
+            }
+
+            // 如果没有找到槽位，检查是否需要返回手牌
+            var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+            if (zone == null)
+            {
+                var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>(true);
+                float best2 = float.MaxValue;
+                EndfieldFrontierTCG.Hand.HandSplineZone bestZ = null;
+                foreach (var z in zones)
+                {
+                    if (z == null) continue;
+                    float d = (transform.position - z.transform.position).sqrMagnitude;
+                    if (d < best2) { best2 = d; bestZ = z; }
+                }
+                zone = bestZ;
+            }
+
+            if (zone != null && _homeSet)
+            {
+                zone.TryReturnCardToHome(this);
+                return;
+            }
+
+            // 如果既没有找到槽位也没有手牌区域，执行默认的掉落动画
+            StartCoroutine(ReleaseDrop());
         }
-        if (zone != null && _homeSet)
+
+        private IEnumerator SmoothMoveToSlot(CardSlotBehaviour slot)
         {
-            // 若在按下后极短时间松手，直接走回家逻辑；并且在内部阶段结束后会调用 ClearInputState()
-            zone.TryReturnCardToHome(this);
-            return;
+            Vector3 startPos = transform.position;
+            Vector3 targetPos = slot.transform.position;
+            Quaternion startRot = transform.rotation;
+            Quaternion targetRot = slot.transform.rotation;
+            
+            float moveTime = 0.3f; // 移动时间
+            float t = 0;
+            Vector3 currentVelocity = Vector3.zero;
+            
+            while (t < moveTime)
+            {
+                t += Time.deltaTime;
+                float progress = t / moveTime;
+                
+                // 使用 SmoothDamp 实现平滑移动
+                transform.position = Vector3.SmoothDamp(
+                    transform.position, 
+                    targetPos, 
+                    ref currentVelocity, 
+                    moveTime - t
+                );
+                
+                // 平滑旋转
+                transform.rotation = Quaternion.Slerp(startRot, targetRot, progress);
+                
+                yield return null;
+            }
+            
+            // 确保最终位置精确
+            transform.position = targetPos;
+            transform.rotation = targetRot;
+            
+            // 设置为新的家位置
+            SetHomePose(targetPos, targetRot);
+            
+            // 通知槽位已放置卡牌
+            slot.TryPlaceCard(this);
+            
+            Debug.Log($"[CardView3D] 已平滑移动到槽位: {slot.name}");
         }
-        // 否则走默认抛物线落地
-        StartCoroutine(ReleaseDrop());
-    }
 
     private void ApplyFollowLean(Vector3 velocity)
     {

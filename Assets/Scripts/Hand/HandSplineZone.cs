@@ -1,6 +1,7 @@
 using UnityEngine;
 using EndfieldFrontierTCG.CA;
 using EndfieldFrontierTCG.Environment;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace EndfieldFrontierTCG.Hand

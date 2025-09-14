@@ -835,7 +835,7 @@ GameObject:
   - component: {fileID: 7875656249198870313}
   - component: {fileID: 311799937618319845}
   - component: {fileID: 1756036514731256317}
-  - component: {fileID: 1766190748971631204}
+  - component: {fileID: 220170685169411354}
   m_Layer: 6
   m_Name: CA Unit Empty
   m_TagString: Untagged
@@ -914,7 +914,7 @@ Rigidbody:
   m_Interpolate: 0
   m_Constraints: 0
   m_CollisionDetection: 0
---- !u!114 &1766190748971631204
+--- !u!114 &220170685169411354
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -926,8 +926,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 66f4b2b02701840f5aa2f5f56efc91c0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  body: {fileID: 0}
-  box: {fileID: 0}
+  body: {fileID: 1756036514731256317}
+  box: {fileID: 311799937618319845}
   MainRenderer: {fileID: 8277276840468362465}
   NameText: {fileID: 7633322607678442224}
   HPText: {fileID: 8874724845833062374}
@@ -944,20 +944,20 @@ MonoBehaviour:
   cardId: -1
   dragPlaneY: 0.75
   groundY: 0
-  followSmooth: 0.05
-  followLeanMaxDeg: 30
-  followLeanResponsiveness: 15
-  followLeanSpeedScale: 30
-  maxAxisDeviationDeg: 80
-  startBoostTime: 2
-  startBoostMul: 10
+  followSmooth: 0.06
+  followLeanMaxDeg: 18
+  followLeanResponsiveness: 16
+  followLeanSpeedScale: 0.06
+  maxAxisDeviationDeg: 10
+  startBoostTime: 0.15
+  startBoostMul: 1.6
   followLiftScale: 0.02
   followLiftMax: 0.12
-  wobbleAmpDeg: 30
+  wobbleAmpDeg: 3
   wobblePeriod: 1.4
   wobbleEaseIn: 0.15
   wobbleEaseOut: 0.12
-  speedThreshold: 2
+  speedThreshold: 1
   speedHysteresis: 0.3
   dropArc: 0.25
   releaseDuration: 0.25
@@ -987,32 +987,41 @@ MonoBehaviour:
       inWeight: 0
       outWeight: 0
     - serializedVersion: 3
-      time: 0.36685756
-      value: 0.08632778
-      inSlope: 0.43841866
-      outSlope: 0.43841866
+      time: 0.25257564
+      value: 0.08048862
+      inSlope: 0.49781004
+      outSlope: 0.49781004
       tangentMode: 0
       weightedMode: 0
       inWeight: 0.33333334
-      outWeight: 1
+      outWeight: 0.922071
     - serializedVersion: 3
-      time: 0.50321406
-      value: 0.48905802
-      inSlope: 4.644972
-      outSlope: 4.644972
+      time: 0.4142254
+      value: 0.2532394
+      inSlope: 1.4875206
+      outSlope: 1.4875206
       tangentMode: 0
       weightedMode: 0
-      inWeight: 0.2539597
-      outWeight: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.6991207
-      value: 0.96968186
-      inSlope: 0.29597685
-      outSlope: 0.29597685
+      time: 0.58473396
+      value: 0.76957464
+      inSlope: 1.4957774
+      outSlope: 1.4957774
       tangentMode: 0
       weightedMode: 0
-      inWeight: 0.5203145
-      outWeight: 0.3155061
+      inWeight: 0.33333334
+      outWeight: 0.19699636
+    - serializedVersion: 3
+      time: 0.70933187
+      value: 0.9022024
+      inSlope: 0.61423343
+      outSlope: 0.61423343
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.41921005
     - serializedVersion: 3
       time: 1
       value: 1
@@ -1038,23 +1047,41 @@ MonoBehaviour:
       inWeight: 0
       outWeight: 0
     - serializedVersion: 3
-      time: 0.4429084
-      value: 0.2565956
-      inSlope: 1.8499752
-      outSlope: 1.8499752
+      time: 0.25257564
+      value: 0.08048862
+      inSlope: 0.49781004
+      outSlope: 0.49781004
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.922071
+    - serializedVersion: 3
+      time: 0.4142254
+      value: 0.2532394
+      inSlope: 1.4875206
+      outSlope: 1.4875206
       tangentMode: 0
       weightedMode: 0
       inWeight: 0.33333334
       outWeight: 0.33333334
     - serializedVersion: 3
-      time: 0.6170806
-      value: 0.806645
-      inSlope: 1.3397326
-      outSlope: 1.3397326
+      time: 0.58473396
+      value: 0.76957464
+      inSlope: 1.4957774
+      outSlope: 1.4957774
       tangentMode: 0
       weightedMode: 0
       inWeight: 0.33333334
-      outWeight: 0.33333334
+      outWeight: 0.19699636
+    - serializedVersion: 3
+      time: 0.70933187
+      value: 0.9022024
+      inSlope: 0.61423343
+      outSlope: 0.61423343
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.41921005
     - serializedVersion: 3
       time: 1
       value: 1
@@ -1080,23 +1107,41 @@ MonoBehaviour:
       inWeight: 0
       outWeight: 0
     - serializedVersion: 3
-      time: 0.19706643
-      value: 0.17169571
-      inSlope: 2.5987542
-      outSlope: 2.5987542
+      time: 0.25257564
+      value: 0.08048862
+      inSlope: 0.49781004
+      outSlope: 0.49781004
       tangentMode: 0
       weightedMode: 0
       inWeight: 0.33333334
-      outWeight: 1
+      outWeight: 0.922071
     - serializedVersion: 3
-      time: 0.25457758
-      value: 0.38439614
-      inSlope: 2.4392843
-      outSlope: 2.4392843
+      time: 0.4142254
+      value: 0.2532394
+      inSlope: 1.4875206
+      outSlope: 1.4875206
       tangentMode: 0
       weightedMode: 0
       inWeight: 0.33333334
-      outWeight: 0.058014654
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 0.58473396
+      value: 0.76957464
+      inSlope: 1.4957774
+      outSlope: 1.4957774
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.19699636
+    - serializedVersion: 3
+      time: 0.70933187
+      value: 0.9022024
+      inSlope: 0.61423343
+      outSlope: 0.61423343
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.41921005
     - serializedVersion: 3
       time: 1
       value: 1

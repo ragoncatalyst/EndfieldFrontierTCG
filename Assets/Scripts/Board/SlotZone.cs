@@ -2,17 +2,61 @@ using UnityEngine;
 
 namespace EndfieldFrontierTCG.Board
 {
-    [ExecuteAlways]
     public abstract class SlotZone : MonoBehaviour
     {
+        [Header("Raycast Settings")]
+        [Tooltip("射线检测的层级")]
+        public LayerMask raycastLayers = -1;
+        
+        [Tooltip("可接受的最大放置距离")]
+        public float maxPlaceDistance = 1.0f;
+
+        // 获取射线命中的槽位位置
+        public bool TryGetHoveredPosition(Vector3 worldPosition, out Vector3 snapPosition, out Quaternion snapRotation)
+        {
+            snapPosition = Vector3.zero;
+            snapRotation = Quaternion.identity;
+
+            // 遍历所有槽位，找到指针所在的槽位
+            for (int r = 0; r < rows; r++)
+            {
+                for (int c = 0; c < cols; c++)
+                {
+                    Vector3 slotPos = GetSlotPosition(r, c);
+                    
+                    // 转换到局部空间来判断是否在槽位范围内
+                    Vector3 localPoint = transform.InverseTransformPoint(worldPosition);
+                    Vector3 localSlotPos = transform.InverseTransformPoint(slotPos);
+                    
+                    // 计算槽位的边界
+                    float halfWidth = cellSize.x * 0.5f;
+                    float halfHeight = cellSize.y * 0.5f;
+                    
+                    // 检查指针是否在槽位矩形范围内
+                    if (localPoint.x >= localSlotPos.x - halfWidth &&
+                        localPoint.x <= localSlotPos.x + halfWidth &&
+                        localPoint.z >= localSlotPos.z - halfHeight &&
+                        localPoint.z <= localSlotPos.z + halfHeight)
+                    {
+                        snapPosition = slotPos;
+                        snapRotation = GetSlotRotation();
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
         [Header("Grid")]
         public int rows = 2;
         public int cols = 5;
-        public Vector2 cellSize = new Vector2(1.2f, 1.8f); // 约 5:8
-        public Vector2 spacing = new Vector2(0.2f, 0.2f);
-        public Vector3 originOffset = Vector3.zero;
-        public float yawDeg = 0f;
-        public float yHeight = 0f;
+        public Vector2 cellSize = new Vector2(1f, 1f);
+        public Vector2 spacing = new Vector2(0f, 0f);
+        
+        // 所有位置相关的变量默认为0
+        protected Vector3 originOffset = Vector3.zero;
+        protected float yawDeg = 0f;
+        protected float yHeight = 0.01f; // 略微抬高以避免Z-fighting
 
         public virtual Vector3 GetSlotPosition(int r, int c)
         {

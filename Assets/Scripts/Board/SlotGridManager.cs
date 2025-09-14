@@ -110,16 +110,54 @@ namespace EndfieldFrontierTCG.Board
 
         public SlotBehaviour GetNearestFreeSlot(Vector3 worldPos)
         {
-            float best = float.PositiveInfinity; SlotBehaviour bestSlot = null;
+            // 将世界坐标转换到本地空间
+            Vector3 localPos = transform.InverseTransformPoint(worldPos);
+            Debug.Log($"[SlotGridManager] 检查位置: 世界坐标={worldPos}, 本地坐标={localPos}");
+            
+            // 计算每个槽位的大小（包括间距）
+            Vector2 slotSize = cellSize;
+            Debug.Log($"[SlotGridManager] 槽位大小: {slotSize}, 间距: {spacing}");
+            
+            // 遍历所有槽位
             for (int i = 0; i < slots.Count; i++)
             {
-                var s = slots[i]; if (s == null || s.IsOccupied) continue;
-                Vector2 a = new Vector2(s.transform.position.x, s.transform.position.z);
-                Vector2 b = new Vector2(worldPos.x, worldPos.z);
-                float d = Vector2.Distance(a, b);
-                if (d < best) { best = d; bestSlot = s; }
+                var s = slots[i];
+                if (s == null) 
+                {
+                    Debug.LogWarning($"[SlotGridManager] 槽位 {i} 为空");
+                    continue;
+                }
+                if (s.IsOccupied)
+                {
+                    Debug.Log($"[SlotGridManager] 槽位 {i} 已被占用");
+                    continue;
+                }
+                
+                // 获取槽位的本地位置
+                Vector3 slotLocalPos = transform.InverseTransformPoint(s.transform.position);
+                
+                // 检查指针是否在槽位范围内
+                float halfWidth = slotSize.x * 0.5f;
+                float halfHeight = slotSize.y * 0.5f;
+                
+                bool canPlace = localPos.x >= slotLocalPos.x - halfWidth &&
+                    localPos.x <= slotLocalPos.x + halfWidth &&
+                    localPos.z >= slotLocalPos.z - halfHeight &&
+                    localPos.z <= slotLocalPos.z + halfHeight;
+                
+                Debug.Log($"[SlotGridManager] 检查槽位 {s.slotId} (Row: {s.slotId / cols}, Col: {s.slotId % cols})" +
+                    $"\n位置: {slotLocalPos}" +
+                    $"\n范围: X[{slotLocalPos.x - halfWidth}, {slotLocalPos.x + halfWidth}], " +
+                    $"Z[{slotLocalPos.z - halfHeight}, {slotLocalPos.z + halfHeight}]" +
+                    $"\n结果: {(canPlace ? "可以放置" : "不在范围内")}");
+                
+                if (canPlace)
+                {
+                    return s;
+                }
             }
-            return bestSlot;
+            
+            return null;
         }
     }
 }

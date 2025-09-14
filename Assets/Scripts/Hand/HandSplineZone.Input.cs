@@ -1,4 +1,5 @@
 using UnityEngine;
+using EndfieldFrontierTCG.CA;
 
 namespace EndfieldFrontierTCG.Hand
 {
