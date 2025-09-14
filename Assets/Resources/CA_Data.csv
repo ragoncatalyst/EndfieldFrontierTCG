@@ -4,5 +4,14 @@ CA_ID,CA_Name_DIS,CA_Type,CA_HPMaximum,CA_ATK_INI,CA_EffectInfo_DIS,CA_DPCost,CA
 3,Xaihi,Unit,8,2,我方单位具有+1攻击力,4,Xaihi2
 4,Avywenna,Unit,10,3,此单位受到的一切伤害-1,5,Avywenna2
 5,Snowshine,Unit,10,2,此单位受到的一切伤害-1,4,Snowshine2
+6,ChenQianYu,Unit,9,3,~,3,ChenQianYu2
+7,Ember,Unit,10,3,~,5,Ember2
+8,Laevatain,Unit,10,4,~,6,Laevatain2
+9,Yvonne,Unit,10,3,~,6,Yvonne2
+10,Walfgard,Unit,10,3,~,4,Walfgard2
+11,Arclight,Unit,10,3,~,5,Arclight2
+12,DaPan,Unit,10,3,~,4,DaPan2
+13,LiFeng,Unit,10,3,~,5,LiFeng2
+
 
 
