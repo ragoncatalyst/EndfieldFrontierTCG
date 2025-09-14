@@ -495,6 +495,18 @@ namespace EndfieldFrontierTCG.Hand
             _compactAssignedSlot.Remove(card);
             
             Debug.Log($"[HandSplineZone] 卡牌已从手牌区域注销: {card.name}");
+            
+            // 重新初始化剩余卡牌的索引
+            for (int i = 0; i < _cards.Length; i++)
+            {
+                if (_cards[i] != null)
+                {
+                    _cards[i].handIndex = i;
+                }
+            }
+            
+            // 强制重新布局剩余卡牌
+            ForceRelayoutExistingCards();
         }
 
 		public void ForceRelayoutExistingCards()
