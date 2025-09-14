@@ -783,45 +783,112 @@ public class CardView3D : MonoBehaviour
 
         private IEnumerator SmoothMoveToSlot(CardSlotBehaviour slot)
         {
-            Vector3 startPos = transform.position;
-            Vector3 targetPos = slot.transform.position;
-            Quaternion startRot = transform.rotation;
-            Quaternion targetRot = slot.transform.rotation;
-            
-            float moveTime = 0.3f; // 移动时间
-            float t = 0;
-            Vector3 currentVelocity = Vector3.zero;
-            
-            while (t < moveTime)
+            if (slot == null) yield break;
+
+            // 先通知槽位我们要放置卡牌，让它做好准备
+            if (!slot.CanAcceptCard(this))
             {
-                t += Time.deltaTime;
-                float progress = t / moveTime;
-                
-                // 使用 SmoothDamp 实现平滑移动
-                transform.position = Vector3.SmoothDamp(
-                    transform.position, 
-                    targetPos, 
-                    ref currentVelocity, 
-                    moveTime - t
-                );
-                
-                // 平滑旋转
-                transform.rotation = Quaternion.Slerp(startRot, targetRot, progress);
-                
-                yield return null;
+                Debug.LogWarning($"[CardView3D] 槽位 {slot.name} 无法接受卡牌");
+                yield break;
             }
+
+            // 获取槽位的精确位置和旋转
+            Vector3 startPos = transform.position;
+            Vector3 targetPos = slot.GetCardPosition();
+            Quaternion startRot = transform.rotation;
+            Quaternion targetRot = slot.GetCardRotation();
             
-            // 确保最终位置精确
-            transform.position = targetPos;
-            transform.rotation = targetRot;
+            // 记录初始状态
+            var originalParent = transform.parent;
+            var originalLayer = gameObject.layer;
+            var originalState = _state;
             
-            // 设置为新的家位置
-            SetHomePose(targetPos, targetRot);
-            
-            // 通知槽位已放置卡牌
-            slot.TryPlaceCard(this);
-            
-            Debug.Log($"[CardView3D] 已平滑移动到槽位: {slot.name}");
+            try
+            {
+                // 设置状态为移动中
+                _state = DragState.Releasing;
+                
+                // 暂时禁用碰撞，避免移动过程中的干扰
+                if (body != null)
+                {
+                    body.isKinematic = true;
+                    body.detectCollisions = false;
+                }
+                
+                float moveTime = 0.25f; // 稍微加快一点移动时间
+                float t = 0;
+                Vector3 currentVelocity = Vector3.zero;
+                
+                // 提前设置父物体，确保在正确的空间中移动
+                transform.SetParent(slot.transform.parent, true);
+                
+                while (t < moveTime)
+                {
+                    t += Time.deltaTime;
+                    float progress = t / moveTime;
+                    
+                    // 使用 SmoothDamp 实现平滑移动，但确保最后一段距离更快
+                    float smoothTime = Mathf.Lerp(0.1f, 0.01f, progress);
+                    transform.position = Vector3.SmoothDamp(
+                        transform.position, 
+                        targetPos, 
+                        ref currentVelocity, 
+                        smoothTime
+                    );
+                    
+                    // 使用 Slerp 实现平滑旋转，但在接近目标时加速
+                    float rotProgress = Mathf.SmoothStep(0, 1, progress);
+                    transform.rotation = Quaternion.Slerp(startRot, targetRot, rotProgress);
+                    
+                    // 检查是否足够接近目标
+                    if (Vector3.Distance(transform.position, targetPos) < 0.001f &&
+                        Quaternion.Angle(transform.rotation, targetRot) < 0.1f)
+                    {
+                        break;
+                    }
+                    
+                    yield return null;
+                }
+                
+                // 确保最终位置和旋转完全精确
+                transform.position = targetPos;
+                transform.rotation = targetRot;
+                
+                // 设置为新的家位置
+                SetHomePose(targetPos, targetRot);
+                
+                // 正式通知槽位放置完成
+                if (slot.TryPlaceCard(this))
+                {
+                    Debug.Log($"[CardView3D] 成功放置到槽位: {slot.name}");
+                    _state = DragState.Idle;
+                    
+                    // 通知手牌区域移除
+                    var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+                    if (handZone != null)
+                    {
+                        handZone.ClearInputState();
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"[CardView3D] 放置失败: {slot.name}");
+                    // 如果放置失败，恢复原始状态
+                    transform.SetParent(originalParent, true);
+                    gameObject.layer = originalLayer;
+                    _state = originalState;
+                }
+            }
+            finally
+            {
+                // 恢复碰撞检测
+                if (body != null)
+                {
+                    body.isKinematic = true;
+                    body.detectCollisions = true;
+                    body.constraints = RigidbodyConstraints.FreezeAll;
+                }
+            }
         }
 
     private void ApplyFollowLean(Vector3 velocity)

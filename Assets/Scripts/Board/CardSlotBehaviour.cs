@@ -140,6 +140,30 @@ namespace EndfieldFrontierTCG.Board
         public bool IsOccupied => _currentCard != null;
         public bool IsHighlighted => _isHighlighted;
 
+        public bool CanAcceptCard(CardView3D card)
+        {
+            if (card == null || IsOccupied) return false;
+            
+            // 这里可以添加更多的检查逻辑，比如：
+            // - 卡牌类型是否符合槽位要求
+            // - 玩家是否有足够的资源放置卡牌
+            // - 是否满足特殊的游戏规则
+            
+            return true;
+        }
+
+        public Vector3 GetCardPosition()
+        {
+            // 返回卡牌应该放置的精确位置
+            return transform.position;
+        }
+
+        public Quaternion GetCardRotation()
+        {
+            // 返回卡牌应该旋转到的精确角度
+            return transform.rotation * Quaternion.Euler(90f, 0f, 0f);
+        }
+
         public void OnHoverEnter()
         {
             UpdateVisualState(true);
