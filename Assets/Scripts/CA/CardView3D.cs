@@ -59,9 +59,15 @@ public class CardView3D : MonoBehaviour
     public float speedThreshold = 1.0f;
     public float speedHysteresis = 0.3f;
 
-    [Header("Release")]
-    public float dropArc = 0.25f;
-    public float releaseDuration = 0.25f;
+    [Header("Release Animation")]
+    [Tooltip("下落动画的速度曲线（0→1）")] 
+    public AnimationCurve dropCurve = new AnimationCurve(
+        new Keyframe(0f, 0f, 0f, 2f),     // 开始时快速加速
+        new Keyframe(0.7f, 0.9f, 0.8f, 0.5f), // 70%时完成90%的移动
+        new Keyframe(1f, 1f, 0f, 0f)      // 平滑结束
+    );
+    [Tooltip("下落动画的持续时间（秒）")] 
+    public float dropDuration = 0.25f;
 
     [Header("Click Filtering")]
     [Tooltip("按下至松开的最大时间（秒），低于该值且移动距离很小则视为点击，不触发回家动画")]
@@ -788,59 +794,40 @@ public class CardView3D : MonoBehaviour
                 }
             }
 
-            // 如果找到了槽位，平滑移动过去
-            if (nearestSlot != null)
-            {
-                Debug.Log($"[CardView3D] 找到最近的槽位: {nearestSlot.name}, 距离: {nearestDistance}");
-                
-                // 断开与所有手牌区域的联系
-                var allHandZones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
-                foreach (var handZone in allHandZones)
+                // 如果找到了槽位，平滑移动过去
+                if (nearestSlot != null)
                 {
-                    if (handZone != null)
+                    Debug.Log($"[CardView3D] 找到最近的槽位: {nearestSlot.name}, 距离: {nearestDistance}");
+                    
+                    // 记录当前世界空间位置和旋转
+                    Vector3 currentWorldPos = transform.position;
+                    Quaternion currentWorldRot = transform.rotation;
+                    
+                    // 断开与所有手牌区域的联系
+                    var allHandZones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
+                    foreach (var handZone in allHandZones)
                     {
-                        handZone.ClearInputState();
-                        handZone.UnregisterCard(this); // 从手牌区域注销这张卡
+                        if (handZone != null)
+                        {
+                            handZone.ClearInputState();
+                            handZone.UnregisterCard(this); // 从手牌区域注销这张卡
+                        }
                     }
+                    
+                    // 确保不会被手牌区域重新认领
+                    transform.SetParent(null);
+                    _homeSet = false;
+                    handIndex = -1; // 清除手牌索引
+                    
+                    // 恢复到记录的位置，确保从正确的位置开始移动
+                    transform.position = currentWorldPos;
+                    transform.rotation = currentWorldRot;
+                    
+                    StartCoroutine(SmoothMoveToSlot(nearestSlot));
+                    return;
                 }
-                
-                // 确保不会被手牌区域重新认领
-                transform.SetParent(null);
-                _homeSet = false;
-                handIndex = -1; // 清除手牌索引
-                
-                StartCoroutine(SmoothMoveToSlot(nearestSlot));
-                return;
-            }
 
-            // 如果没有找到槽位，检查是否需要返回手牌
-            var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-            if (zone == null)
-            {
-                var zones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
-                float best2 = float.MaxValue;
-                EndfieldFrontierTCG.Hand.HandSplineZone bestZ = null;
-                foreach (var z in zones)
-                {
-                    if (z == null) continue;
-                    float d = (transform.position - z.transform.position).sqrMagnitude;
-                    if (d < best2) { best2 = d; bestZ = z; }
-                }
-                zone = bestZ;
-            }
-
-            if (zone != null && _homeSet)
-            {
-                // 检查是否已经在槽位中
-                var currentSlot = GetComponentInParent<CardSlotBehaviour>();
-                if (currentSlot == null)
-                {
-                    zone.TryReturnCardToHome(this);
-                }
-                return;
-            }
-
-            // 如果既没有找到槽位也没有手牌区域，执行默认的掉落动画
+            // 如果没有找到槽位，直接执行掉落动画
             StartCoroutine(ReleaseDrop());
         }
 
@@ -884,61 +871,62 @@ public class CardView3D : MonoBehaviour
                 float t = 0;
                 Vector3 currentVelocity = Vector3.zero;
                 
-                // 提前设置父物体，确保在正确的空间中移动
-                transform.SetParent(slot.transform.parent, true);
-
-                // 计算抛物线参数
-                float height = Mathf.Min(0.2f, distance * 0.15f); // 降低抛物线高度
-                // 确保中点的Y坐标高于起点和终点
-                float midY = Mathf.Max(startPos.y, targetPos.y) + height;
-                Vector3 midPoint = new Vector3(
-                    (startPos.x + targetPos.x) * 0.5f,
-                    midY,
-                    (startPos.z + targetPos.z) * 0.5f
+                Debug.Log($"[CardView3D] 开始移动，当前世界位置: {transform.position}");
+                
+                // 记录当前世界空间位置和旋转
+                Vector3 worldReleasePos = transform.position;
+                Quaternion worldReleaseRot = transform.rotation;
+                
+                // 先计算在槽位空间中的起始位置
+                Vector3 startLocalPos = slot.transform.InverseTransformPoint(worldReleasePos);
+                Vector3 endLocalPos = Vector3.zero; // 槽位中心
+                
+                Debug.Log($"[CardView3D] 转换到本地空间的起始位置: {startLocalPos}");
+                
+                // 设置父物体，但保持世界位置不变
+                transform.SetParent(slot.transform, true);
+                
+                // 确保我们从正确的起始位置开始
+                transform.localPosition = startLocalPos;
+                
+                Debug.Log($"[CardView3D] 设置父物体后的本地位置: {transform.localPosition}");
+                
+                // 计算垂直下落的本地空间终点（保持XZ不变，只改变Y）
+                Vector3 dropLocalEndPos = new Vector3(startLocalPos.x, endLocalPos.y, startLocalPos.z);
+                
+                // 计算本地空间距离
+                float dropDistance = Mathf.Abs(startLocalPos.y - endLocalPos.y);
+                float slideDistance = Vector2.Distance(
+                    new Vector2(startLocalPos.x, startLocalPos.z),
+                    new Vector2(endLocalPos.x, endLocalPos.z)
                 );
                 
-                while (t < moveTime)
+                // 根据距离调整时间
+                float dropTime = Mathf.Lerp(0.15f, 0.3f, dropDistance / 1f);
+                
+                // 记录速度
+                Vector3 slideVelocity = Vector3.zero;
+                Vector3 currentLocalPos = startLocalPos;
+                
+                // 获取目标旋转
+                Quaternion endWorldRot = slot.GetCardRotation();
+                
+                float elapsedTime = 0f;
+                
+                while (elapsedTime < dropDuration)
                 {
-                    t += Time.deltaTime;
-                    float progress = t / moveTime;
+                    elapsedTime += Time.deltaTime;
+                    float progress = elapsedTime / dropDuration;
                     
-                    // 使用贝塞尔曲线实现抛物线运动
-                    float oneMinusT = 1f - progress;
-                    Vector3 position = oneMinusT * oneMinusT * startPos +
-                                     2f * oneMinusT * progress * midPoint +
-                                     progress * progress * targetPos;
-
-                    // 添加一些随机摇晃
-                    if (progress < 0.8f) // 在接近终点时减少摇晃
-                    {
-                        float shake = Mathf.Sin(progress * 15f) * (1f - progress) * 0.05f;
-                        position += new Vector3(shake, 0, shake);
-                    }
-
-                    // 使用 SmoothDamp 平滑跟随计算出的位置
-                    transform.position = Vector3.SmoothDamp(
-                        transform.position, 
-                        position, 
-                        ref currentVelocity, 
-                        0.05f
-                    );
+                    // 使用曲线计算整体移动进度
+                    float moveProgress = dropCurve.Evaluate(progress);
                     
-                    // 根据移动方向动态调整旋转
-                    Vector3 moveDirection = (position - transform.position).normalized;
-                    if (moveDirection.sqrMagnitude > 0.01f)
-                    {
-                        float tiltAmount = Mathf.Lerp(15f, 0f, progress); // 随着接近目标减少倾斜
-                        Quaternion tiltRotation = Quaternion.FromToRotation(Vector3.up, Vector3.up + moveDirection * 0.5f);
-                        Quaternion targetRotWithTilt = tiltRotation * targetRot;
-                        transform.rotation = Quaternion.Slerp(transform.rotation, targetRotWithTilt, Time.deltaTime * 15f);
-                    }
+                    // 直接在所有轴向上进行插值，实现斜向下落
+                    Vector3 currentPos = Vector3.Lerp(startLocalPos, endLocalPos, moveProgress);
+                    transform.localPosition = currentPos;
                     
-                    // 接近终点时的额外处理
-                    if (progress > 0.8f)
-                    {
-                        float finalProgress = (progress - 0.8f) / 0.2f;
-                        transform.rotation = Quaternion.Slerp(transform.rotation, targetRot, finalProgress);
-                    }
+                    // 平滑旋转到目标角度
+                    transform.rotation = Quaternion.Slerp(transform.rotation, endWorldRot, moveProgress);
                     
                     yield return null;
                 }
@@ -1088,18 +1076,22 @@ public class CardView3D : MonoBehaviour
         Vector3 end = new Vector3(transform.position.x, groundY, transform.position.z);
         Quaternion startR = transform.rotation;
         Quaternion endR = _baseRot;
-        float t = 0f, dur = Mathf.Max(0.05f, releaseDuration);
+        float t = 0f, dur = 0.2f; // 固定下落时间
+        Vector3 currentVelocity = Vector3.zero;
+        
         while (t < dur)
         {
             t += Time.deltaTime;
             float p = Mathf.Clamp01(t / dur);
-            float yArc = dropArc * 4f * p * (1f - p);
-            Vector3 pos = Vector3.Lerp(start, end, p);
-            pos.y += yArc;
-            transform.position = pos;
-            transform.rotation = Quaternion.Slerp(startR, endR, Mathf.SmoothStep(0f, 1f, p));
+            
+            // 直接线性插值计算位置
+            Vector3 targetPos = Vector3.Lerp(start, end, p);
+            transform.position = Vector3.SmoothDamp(transform.position, targetPos, ref currentVelocity, 0.05f);
+            transform.rotation = Quaternion.Slerp(startR, endR, p);
             yield return null;
         }
+        
+        // 确保最终位置和旋转完全精确
         transform.position = end;
         transform.rotation = endR;
         if (body != null)
