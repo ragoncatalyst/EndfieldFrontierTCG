@@ -525,6 +525,7 @@ public class CardView3D : MonoBehaviour
         Vector2 startXZ = new Vector2(startPos.x, startPos.z);
         Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
         float currentY = startPos.y; // 保持当前高度
+        Vector2 currentVelocityXZ = Vector2.zero;
 
         if (debugHoverLogs)
         {
@@ -536,17 +537,29 @@ public class CardView3D : MonoBehaviour
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1);
 
-            // XZ平面移动：使用returnPhase1XZCurve
-            float k = _returnPhase1XZCurve.Evaluate(a);
-            Vector2 xz = Vector2.LerpUnclamped(startXZ, tempXZ2, k);
+            // 获取当前速度系数
+            float speedMultiplier = _returnPhase1XZCurve.Evaluate(a);
+
+            // 计算目标位置
+            Vector2 targetXZ = Vector2.Lerp(startXZ, tempXZ2, a);
+
+            // 使用SmoothDamp进行速度控制的移动
+            Vector2 currentXZ = new Vector2(transform.position.x, transform.position.z);
+            Vector2 newXZ = Vector2.SmoothDamp(
+                currentXZ,
+                targetXZ,
+                ref currentVelocityXZ,
+                dur1 * (1f - speedMultiplier), // 速度越大，平滑时间越短
+                20f * speedMultiplier // 速度越大，最大速度越高
+            );
 
             // 应用位置（保持Y不变）和旋转
-            transform.position = new Vector3(xz.x, currentY, xz.y);
-            transform.rotation = Quaternion.Slerp(startRot, _homeRot, k * 0.4f);
+            transform.position = new Vector3(newXZ.x, currentY, newXZ.y);
+            transform.rotation = Quaternion.Slerp(startRot, _homeRot, a * 0.4f);
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, k: {k:F2}");
+                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, 速度: {speedMultiplier:F2}, 位置: {newXZ}");
             }
 
             yield return null;
@@ -562,6 +575,7 @@ public class CardView3D : MonoBehaviour
         Vector3 endP2 = new Vector3(_homePos.x, homeY, _homePos.z);
         float dur2 = Mathf.Max(0.01f, returnPhase2Duration);
         float tP2 = 0f;
+        Vector3 currentVelocity = Vector3.zero;
 
         // 添加前向偏移，避免被相邻卡片遮挡
         Vector3 cameraForward = CameraForwardPlanar();
@@ -576,17 +590,30 @@ public class CardView3D : MonoBehaviour
         {
             tP2 += Time.deltaTime;
             float a = Mathf.Clamp01(tP2 / dur2);
-            float k = _returnPhase2Curve.Evaluate(a);
+
+            // 获取当前速度系数
+            float speedMultiplier = _returnPhase2Curve.Evaluate(a);
+
+            // 计算目标位置
+            Vector3 targetPos = Vector3.Lerp(startP2, endP2, a);
+            targetPos.y = homeY; // 保持Y恒定
+
+            // 使用SmoothDamp进行速度控制的移动
+            Vector3 newPos = Vector3.SmoothDamp(
+                transform.position,
+                targetPos,
+                ref currentVelocity,
+                dur2 * (1f - speedMultiplier), // 速度越大，平滑时间越短
+                15f * speedMultiplier // 速度越大，最大速度越高
+            );
 
             // 应用位置和旋转
-            Vector3 pos = Vector3.LerpUnclamped(startP2, endP2, k);
-            pos.y = homeY; // 保持Y恒定
-            transform.position = pos;
-            transform.rotation = Quaternion.Slerp(startR2, _homeRot, k);
+            transform.position = newPos;
+            transform.rotation = Quaternion.Slerp(startR2, _homeRot, a);
 
             if (debugHoverLogs && tP2 % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, k: {k:F2}");
+                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 速度: {speedMultiplier:F2}, 位置: {newPos}");
             }
 
             yield return null;
