@@ -71,11 +71,12 @@ public class CardView3D : MonoBehaviour
 
     [Header("Two-Phase Return Animation")]
     [SerializeField]
-    [Tooltip("第一阶段：XZ平面移动的速度曲线（0→1）\n- 开始时快速加速\n- 60%时完成85%的移动\n- 平滑结束")]
+    [Tooltip("第一阶段：XZ平面移动的速度曲线（0→1）\n- 开始时快速加速\n- 中间平稳移动\n- 结束时平滑减速")]
     private AnimationCurve _returnPhase1XZCurve = new AnimationCurve(
-        new Keyframe(0f, 0f, 0f, 1.5f),
-        new Keyframe(0.6f, 0.85f, 1f, 0.5f),
-        new Keyframe(1f, 1f, 0f, 0f)
+        new Keyframe(0f, 0f, 0f, 2f),      // 开始时快速加速
+        new Keyframe(0.3f, 0.7f, 1f, 1f),  // 30%时完成70%的移动
+        new Keyframe(0.7f, 0.9f, 0.5f, 0.5f), // 70%时完成90%的移动
+        new Keyframe(1f, 1f, 0f, 0f)       // 平滑结束
     );
     public AnimationCurve returnPhase1XZCurve
     {
@@ -83,35 +84,17 @@ public class CardView3D : MonoBehaviour
         set
         {
             _returnPhase1XZCurve = value;
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第一阶段XZ曲线: {value}");
+            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第一阶段移动曲线: {value}");
         }
     }
 
     [SerializeField]
-    [Tooltip("第一阶段：Y轴回归的速度曲线（0→1）\n- 开始时缓慢\n- 30%时只完成10%的移动\n- 70%时快速完成到90%\n- 平滑结束")]
-    private AnimationCurve _returnPhase1YCurve = new AnimationCurve(
-        new Keyframe(0f, 0f, 0f, 0f),
-        new Keyframe(0.3f, 0.1f, 0.5f, 0.5f),
-        new Keyframe(0.7f, 0.9f, 1f, 0.5f),
-        new Keyframe(1f, 1f, 0f, 0f)
-    );
-    public AnimationCurve returnPhase1YCurve
-    {
-        get => _returnPhase1YCurve;
-        set
-        {
-            _returnPhase1YCurve = value;
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第一阶段Y曲线: {value}");
-        }
-    }
-
-    [SerializeField]
-    [Tooltip("第二阶段：回到最终位置的速度曲线（0→1）\n- 开始时中等加速\n- 50%时完成70%的移动\n- 80%时几乎完成\n- 平滑结束")]
+    [Tooltip("第二阶段：回到最终位置的速度曲线（0→1）\n- 开始时缓慢加速\n- 中间快速移动\n- 结束时平滑减速")]
     private AnimationCurve _returnPhase2Curve = new AnimationCurve(
-        new Keyframe(0f, 0f, 0f, 1.2f),
-        new Keyframe(0.5f, 0.7f, 1f, 1f),
-        new Keyframe(0.8f, 0.95f, 0.5f, 0.3f),
-        new Keyframe(1f, 1f, 0f, 0f)
+        new Keyframe(0f, 0f, 0f, 0.5f),    // 开始时缓慢加速
+        new Keyframe(0.4f, 0.6f, 1.5f, 1.5f), // 40%时完成60%的移动
+        new Keyframe(0.8f, 0.95f, 0.8f, 0.5f), // 80%时几乎完成
+        new Keyframe(1f, 1f, 0f, 0f)       // 平滑结束
     );
     public AnimationCurve returnPhase2Curve
     {
@@ -125,7 +108,7 @@ public class CardView3D : MonoBehaviour
 
     [SerializeField]
     [Tooltip("第一阶段的持续时间（秒）")]
-    private float _returnPhase1Duration = 0.15f;
+    private float _returnPhase1Duration = 0.2f;
     public float returnPhase1Duration
     {
         get => _returnPhase1Duration;
@@ -138,7 +121,7 @@ public class CardView3D : MonoBehaviour
 
     [SerializeField]
     [Tooltip("第二阶段的持续时间（秒）")]
-    private float _returnPhase2Duration = 0.18f;
+    private float _returnPhase2Duration = 0.25f;
     public float returnPhase2Duration
     {
         get => _returnPhase2Duration;
@@ -151,7 +134,7 @@ public class CardView3D : MonoBehaviour
 
     [SerializeField]
     [Tooltip("在第二阶段前方的偏移距离（米），避免被相邻卡遮挡")]
-    private float _returnFrontBias = 0.05f;
+    private float _returnFrontBias = 0.15f;
     public float returnFrontBias
     {
         get => _returnFrontBias;
@@ -536,16 +519,16 @@ public class CardView3D : MonoBehaviour
             }
         }
 
-        // Phase 1: 水平移动到手牌区域前方的临时点，同时缓慢下降到目标高度
+        // Phase 1: 保持当前高度，在XZ平面上移动到手牌区域前方的临时点
         float t = 0f;
         float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
         Vector2 startXZ = new Vector2(startPos.x, startPos.z);
         Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
-        float yStart = startPos.y;
+        float currentY = startPos.y; // 保持当前高度
 
         if (debugHoverLogs)
         {
-            Debug.Log($"[CardView3D] 开始第一阶段返回 - 从: {startPos}, 到: {tempXZ}, 持续: {dur1}秒");
+            Debug.Log($"[CardView3D] 开始第一阶段返回 - 从: {startPos}, 到前方点: {tempXZ}, 持续: {dur1}秒");
         }
 
         while (t < dur1)
@@ -554,27 +537,23 @@ public class CardView3D : MonoBehaviour
             float a = Mathf.Clamp01(t / dur1);
 
             // XZ平面移动：使用returnPhase1XZCurve
-            float kXZ = _returnPhase1XZCurve.Evaluate(a);
-            Vector2 xz = Vector2.LerpUnclamped(startXZ, tempXZ2, kXZ);
+            float k = _returnPhase1XZCurve.Evaluate(a);
+            Vector2 xz = Vector2.LerpUnclamped(startXZ, tempXZ2, k);
 
-            // Y轴下降：使用returnPhase1YCurve
-            float kY = _returnPhase1YCurve.Evaluate(a);
-            float y = Mathf.LerpUnclamped(yStart, homeY, kY);
-
-            // 应用位置和旋转
-            transform.position = new Vector3(xz.x, y, xz.y);
-            transform.rotation = Quaternion.Slerp(startRot, _homeRot, kXZ * 0.4f);
+            // 应用位置（保持Y不变）和旋转
+            transform.position = new Vector3(xz.x, currentY, xz.y);
+            transform.rotation = Quaternion.Slerp(startRot, _homeRot, k * 0.4f);
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, XZ: {kXZ:F2}, Y: {kY:F2}");
+                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, k: {k:F2}");
             }
 
             yield return null;
         }
 
-        // 确保在进入阶段2之前，位置和旋转完全正确
-        transform.position = new Vector3(tempXZ.x, homeY, tempXZ.z);
+        // 确保在进入阶段2之前，XZ位置完全正确
+        transform.position = new Vector3(tempXZ.x, currentY, tempXZ.z);
         yield return null;
 
         // Phase 2: 从临时点平滑移动到最终位置
