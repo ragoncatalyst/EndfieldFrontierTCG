@@ -764,9 +764,9 @@ namespace EndfieldFrontierTCG.Hand
 
             if (!card.IsDragging)
             {
-                // 使用卡牌自己的二段式返回动画配置
-                card.BeginSmoothReturnToHome(returnAheadZ, card.returnPhase1Duration, card.returnPhase2Duration);
-                Debug.Log($"[HandSplineZone] 卡牌开始二段式返回: {card.name}, 阶段1: {card.returnPhase1Duration}秒, 阶段2: {card.returnPhase2Duration}秒");
+                // 使用手牌区域配置的二段式返回时间
+                card.BeginSmoothReturnToHome(returnAheadZ, returnPhase1, returnPhase2);
+                Debug.Log($"[HandSplineZone] 卡牌开始二段式返回: {card.name}, 前向偏移: {returnAheadZ}米, 阶段1: {returnPhase1}秒, 阶段2: {returnPhase2}秒");
             }
             return true;
         }
