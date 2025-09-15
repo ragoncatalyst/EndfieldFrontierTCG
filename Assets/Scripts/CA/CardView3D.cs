@@ -69,18 +69,42 @@ public class CardView3D : MonoBehaviour
     [Tooltip("下落动画的持续时间（秒）")] 
     public float dropDuration = 0.25f;
 
+    [Header("Return Animation")]
+    [Tooltip("二段式返回：第一阶段 XZ 平面移动的速度曲线（0→1）")]
+    public AnimationCurve returnPhase1XZCurve = new AnimationCurve(
+        new Keyframe(0f, 0f, 0f, 1.5f),     // 开始时快速加速
+        new Keyframe(0.6f, 0.85f, 1f, 0.5f), // 60%时完成85%的移动
+        new Keyframe(1f, 1f, 0f, 0f)         // 平滑结束
+    );
+    [Tooltip("二段式返回：第一阶段 Y 轴回归的速度曲线（0→1）")]
+    public AnimationCurve returnPhase1YCurve = new AnimationCurve(
+        new Keyframe(0f, 0f, 0f, 0f),      // 开始时缓慢
+        new Keyframe(0.3f, 0.1f, 0.5f, 0.5f), // 30%时只完成10%的移动
+        new Keyframe(0.7f, 0.9f, 1f, 0.5f),   // 70%时快速完成到90%
+        new Keyframe(1f, 1f, 0f, 0f)          // 平滑结束
+    );
+    [Tooltip("二段式返回：第二阶段回到槽位的速度曲线（0→1）")]
+    public AnimationCurve returnPhase2Curve = new AnimationCurve(
+        new Keyframe(0f, 0f, 0f, 1.2f),     // 开始时中等加速
+        new Keyframe(0.5f, 0.7f, 1f, 1f),   // 50%时完成70%的移动
+        new Keyframe(0.8f, 0.95f, 0.5f, 0.3f), // 80%时几乎完成
+        new Keyframe(1f, 1f, 0f, 0f)         // 平滑结束
+    );
+    [Tooltip("二段式返回：第一阶段的持续时间（秒）")]
+    public float returnPhase1Duration = 0.15f;
+    [Tooltip("二段式返回：第二阶段的持续时间（秒）")]
+    public float returnPhase2Duration = 0.18f;
+    [Tooltip("二段式返回：在第二阶段前方的偏移距离（米），避免被相邻卡遮挡")]
+    public float returnFrontBias = 0.05f;
+    [Tooltip("二段式返回：第二阶段期间临时提高排序顺序，避免被相邻卡挡住")]
+    public int returnSortingBoost = 20;
+
     [Header("Click Filtering")]
     [Tooltip("按下至松开的最大时间（秒），低于该值且移动距离很小则视为点击，不触发回家动画")]
     public float clickMaxDuration = 0.15f;
     [Tooltip("按下至松开的最大位移（米），低于该值且时间很短则视为点击")]
     public float clickMaxDistance = 0.05f;
 
-    [Header("Return Visuals")]
-    [Tooltip("在二阶段归位时，沿相机方向的前置偏移（米），避免被相邻卡遮挡")] public float returnFrontBias = 0.05f;
-    [Tooltip("二阶段期间临时提高排序顺序，避免被相邻卡挡住")] public int returnSortingBoost = 20;
-    [Header("Snap Return Durations")]
-    public float snapReturnPhase1 = 0.15f;
-    public float snapReturnPhase2 = 0.18f;
 
     [Header("Drag Visuals")]
     [Tooltip("拖拽时朝向相机偏移的距离（米），避免与手牌同平面发生穿插")] public float dragFrontBias = 0.03f;
@@ -96,10 +120,6 @@ public class CardView3D : MonoBehaviour
     private Vector3 _collisionAdjust = Vector3.zero;
     private Vector3 _collisionAdjustVel = Vector3.zero;
 
-    [Header("Return Curves")]
-    [Tooltip("阶段1：水平 XZ 位移的速度曲线（0→1）")] public AnimationCurve returnPhase1XZCurve = new AnimationCurve(new Keyframe(0f,0f), new Keyframe(1f,1f));
-    [Tooltip("阶段1：Y 回归的速度曲线（0→1）")] public AnimationCurve returnPhase1YCurve = new AnimationCurve(new Keyframe(0f,0f), new Keyframe(1f,1f));
-    [Tooltip("阶段2：回到槽位的速度曲线（0→1）")] public AnimationCurve returnPhase2Curve = new AnimationCurve(new Keyframe(0f,0f), new Keyframe(1f,1f));
 
     private enum DragState { Idle, Picking, Dragging, Releasing }
     private DragState _state = DragState.Idle;
@@ -300,25 +320,84 @@ public class CardView3D : MonoBehaviour
 
     public void SetHomePose(Vector3 pos, Quaternion rot)
     {
-        _homePos = pos; _homeRot = rot; _homeSet = true;
+        // 清除父级引用
+        _homeParent = null;
+
+        // 直接使用世界空间坐标和旋转
+        _homePos = pos;
+        _homeRot = rot;
+
+        // 本地空间坐标和旋转与世界空间相同
+        _homeLocalPos = pos;
+        _homeLocalRot = rot;
+
+        // 标记家位置已设置
+        _homeSet = true;
+
+        if (debugHoverLogs)
+        {
+            Debug.Log($"[CardView3D] 设置家位置（无父级） - 世界坐标: {pos}");
+        }
     }
 
     public void SetHomeFromZone(Transform zone, Vector3 worldPos, Quaternion worldRot)
     {
+        // 记录父级引用
         _homeParent = zone;
-        _homeLocalPos = zone != null ? zone.InverseTransformPoint(worldPos) : worldPos;
-        _homeLocalRot = zone != null ? Quaternion.Inverse(zone.rotation) * worldRot : worldRot;
-        _homePos = worldPos; _homeRot = worldRot; _homeSet = true;
+
+        // 计算本地空间坐标和旋转
+        if (zone != null)
+        {
+            _homeLocalPos = zone.InverseTransformPoint(worldPos);
+            _homeLocalRot = Quaternion.Inverse(zone.rotation) * worldRot;
+        }
+        else
+        {
+            _homeLocalPos = worldPos;
+            _homeLocalRot = worldRot;
+        }
+
+        // 记录世界空间坐标和旋转（用于快速访问）
+        _homePos = worldPos;
+        _homeRot = worldRot;
+
+        // 标记家位置已设置
+        _homeSet = true;
+
+        if (debugHoverLogs)
+        {
+            Debug.Log($"[CardView3D] 设置家位置 - 世界坐标: {worldPos}, 本地坐标: {_homeLocalPos}, 父级: {(zone != null ? zone.name : "无")}");
+        }
     }
 
     private void GetHomeWorldPose(out Vector3 pos, out Quaternion rot)
     {
-        if (_homeParent != null)
+        if (_homeParent != null && _homeParent.gameObject.activeInHierarchy)
         {
+            // 如果有父级且父级处于激活状态，计算世界空间坐标和旋转
             pos = _homeParent.TransformPoint(_homeLocalPos);
             rot = _homeParent.rotation * _homeLocalRot;
+
+            // 更新缓存的世界空间坐标和旋转
+            _homePos = pos;
+            _homeRot = rot;
+
+            if (debugHoverLogs)
+            {
+                Debug.Log($"[CardView3D] 获取家位置 - 从父级 {_homeParent.name} 计算世界坐标: {pos}");
+            }
         }
-        else { pos = _homePos; rot = _homeRot; }
+        else
+        {
+            // 如果没有父级或父级未激活，使用缓存的世界空间坐标和旋转
+            pos = _homePos;
+            rot = _homeRot;
+
+            if (debugHoverLogs && _homeParent != null)
+            {
+                Debug.Log($"[CardView3D] 获取家位置 - 父级 {_homeParent.name} 未激活，使用缓存坐标: {pos}");
+            }
+        }
     }
 
     public void SnapTo(Vector3 pos, Quaternion rot)
@@ -372,46 +451,89 @@ public class CardView3D : MonoBehaviour
         // temp point just "above" home along +Z on XZ plane (world Z+)
         Vector3 tempXZ = new Vector3(_homePos.x, homeY, _homePos.z + aheadZ);
 
-        // 不再修改材质/深度与 sortingOrder，避免在阶段切换处出现停顿与回撤
+        // 提升排序，避免被其他卡牌遮挡
+        if (_allRenderers != null)
+        {
+            for (int i = 0; i < _allRenderers.Length; i++)
+            {
+                try { _allRenderers[i].sortingOrder = _origSortingOrders[i] + returnSortingBoost; } catch {}
+            }
+        }
 
-        // Phase 1a (duration t1): move XZ from current -> tempXZ, keep Y unchanged（曲线可配）
+        // Phase 1a (duration t1): move XZ from current -> tempXZ, keep Y unchanged（使用配置的曲线）
         float t = 0f;
-        float dur1 = Mathf.Max(0.0001f, t1);
+        float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
         Vector2 startXZ = new Vector2(startPos.x, startPos.z);
         Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
         while (t < dur1)
         {
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1);
-            float k = EvaluateReturnCurve(returnPhase1XZCurve, a);
+            float k = returnPhase1XZCurve.Evaluate(a);
             Vector2 xz = Vector2.LerpUnclamped(startXZ, tempXZ2, k);
             transform.position = new Vector3(xz.x, startPos.y, xz.y);
             transform.rotation = Quaternion.Slerp(startRot, _homeRot, k * 0.4f);
             yield return null;
         }
-        // Phase 1b: 等待/拉回 Y 到 homeY（曲线可配）
-        t = 0f; float dur1b = Mathf.Max(0.0001f, t1);
+
+        // Phase 1b: 等待/拉回 Y 到 homeY（使用配置的曲线）
+        t = 0f;
+        float dur1b = Mathf.Max(0.0001f, returnPhase1Duration);
         float yStart = transform.position.y;
         while (t < dur1b)
         {
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1b);
-            float k = EvaluateReturnCurve(returnPhase1YCurve, a);
+            float k = returnPhase1YCurve.Evaluate(a);
             float y = Mathf.LerpUnclamped(yStart, homeY, k);
             Vector3 p = transform.position; p.y = y; transform.position = p;
             transform.rotation = Quaternion.Slerp(transform.rotation, _homeRot, k * 0.3f);
             yield return null;
         }
+
         // 确保在进入阶段2之前，Y 已经完全等于 homeY，并在 Z+ 相邻点停留一帧
         {
             Vector3 p = transform.position; p.y = homeY; transform.position = p; 
             yield return null;
         }
-        // Phase 2 独立实现：曲线可配 + y 恒定
-        yield return ReturnPhase2EaseIn(t2);
-        _returnHomeCo = null;
-        IsReturningHome = false;
-        _state = DragState.Idle;
+
+        // Phase 2: 从临时点平滑移动到最终位置（使用配置的曲线）
+        float homeY2 = _homePos.y;
+        Vector3 startP2 = transform.position;
+        Quaternion startR2 = transform.rotation;
+        Vector3 endP2 = new Vector3(_homePos.x, homeY2, _homePos.z);
+        float dur2 = Mathf.Max(0.01f, returnPhase2Duration);
+        float tP2 = 0f;
+
+        // 在第二阶段开始时添加前向偏移，避免被相邻卡片遮挡
+        Vector3 cameraForward = CameraForwardPlanar();
+        startP2 += cameraForward * returnFrontBias;
+
+        while (tP2 < dur2)
+        {
+            tP2 += Time.deltaTime;
+            float a = Mathf.Clamp01(tP2 / dur2);
+            float k = returnPhase2Curve.Evaluate(a);
+            Vector3 pos = Vector3.LerpUnclamped(startP2, endP2, k);
+            pos.y = homeY2; // y 恒定
+            transform.position = pos;
+            transform.rotation = Quaternion.Slerp(startR2, _homeRot, k);
+            yield return null;
+        }
+
+        // 恢复原始排序顺序
+        if (_allRenderers != null)
+        {
+            for (int i = 0; i < _allRenderers.Length; i++)
+            {
+                try { _allRenderers[i].sortingOrder = _origSortingOrders[i]; } catch {}
+            }
+        }
+
+        // 让一帧过去再退出，保证排序恢复不会与最后一帧位置写入产生竞争
+        yield return null;
+
+        // 恢复物理状态
         if (saved)
         {
             if (body != null)
@@ -424,48 +546,12 @@ public class CardView3D : MonoBehaviour
             if (box != null) box.enabled = prevBoxEnabled;
         }
 
-        // 无需还原材质，因为没有修改
-    }
-
-    private IEnumerator ReturnPhase2EaseIn(float t2)
-    {
-        float homeY = _homePos.y;
-        Vector3 startP2 = transform.position;
-        Quaternion startR2 = transform.rotation;
-        Vector3 endP2 = new Vector3(_homePos.x, homeY, _homePos.z);
-        float dur2 = Mathf.Max(0.01f, t2);
-        float tP2 = 0f;
-        // 提升排序，避免二阶段被挡
-        if (_allRenderers != null)
-        {
-            for (int i = 0; i < _allRenderers.Length; i++)
-            {
-                try { _allRenderers[i].sortingOrder = _origSortingOrders[i] + returnSortingBoost; } catch {}
-            }
-        }
-        while (tP2 < dur2)
-        {
-            tP2 += Time.deltaTime;
-            float a = Mathf.Clamp01(tP2 / dur2);
-            float k = EvaluateReturnCurve(returnPhase2Curve, a);
-            Vector3 pos = Vector3.LerpUnclamped(startP2, endP2, k);
-            pos.y = homeY; // y 恒定
-            transform.position = pos;
-            transform.rotation = Quaternion.Slerp(startR2, _homeRot, k);
-            yield return null;
-        }
-        // 结束时不做硬性终点校正，避免“最后一下”；位置已非常接近终点
-        // 保持当前 transform 即可
-        if (_allRenderers != null)
-        {
-            for (int i = 0; i < _allRenderers.Length; i++)
-            {
-                try { _allRenderers[i].sortingOrder = _origSortingOrders[i]; } catch {}
-            }
-        }
-        // 让一帧过去再退出，保证排序恢复不会与最后一帧位置写入产生竞争
-        yield return null;
+        // 清理状态
+        _returnHomeCo = null;
+        IsReturningHome = false;
+        _state = DragState.Idle;
         InitializeForNextDrag();
+
         // 允许下一帧开始接受新的 hover
         yield return null;
     }
@@ -827,7 +913,16 @@ public class CardView3D : MonoBehaviour
                     return;
                 }
 
-            // 如果没有找到槽位，直接执行掉落动画
+            // 如果没有找到槽位，检查是否在手牌区域
+            var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+            if (handZone != null && _homeSet)
+            {
+                // 使用配置的二段式返回动画
+                BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
+                return;
+            }
+
+            // 如果不在手牌区域，直接执行掉落动画
             StartCoroutine(ReleaseDrop());
         }
 
