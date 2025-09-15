@@ -206,7 +206,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   typeManager: {fileID: 289615524}
   parentForCards: {fileID: 1715820461}
-  firstHandIds: 0100000002000000030000000400000005000000
+  firstHandIds: 010000000200000003000000040000000500000006000000070000000800000009000000
   clearBeforeDeal: 0
   targetSplineZone: {fileID: 1715820459}
   centerSpacing: 1
@@ -859,7 +859,7 @@ MonoBehaviour:
   yawAdjustDeg: 0
   snapDistance: 20
   autoPlaceAtCameraBottom: 1
-  viewportBottomMargin: 0.086
+  viewportBottomMargin: 0.06
   stackDepthByIndex: 1
   depthPerSlot: 0.01
   reverseDepthOrder: 0
@@ -872,7 +872,7 @@ MonoBehaviour:
   fixedCardEuler: {x: 90, y: 0, z: 0}
   yawAlignToLineDirection: 1
   hoverX: 0.25
-  hoverXLerp: 0.15
+  hoverXLerp: 0.1
   hoverZ: 0.28
   hoverZLerp: 0.1
   hoverZLeft: 0.14
