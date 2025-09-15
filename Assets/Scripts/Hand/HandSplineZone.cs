@@ -762,7 +762,12 @@ namespace EndfieldFrontierTCG.Hand
                 return false;
             }
 
-            if (!card.IsDragging) card.BeginSmoothReturnToHome(returnAheadZ, returnPhase1, returnPhase2);
+            if (!card.IsDragging)
+            {
+                // 使用卡牌自己的二段式返回动画配置
+                card.BeginSmoothReturnToHome(returnAheadZ, card.returnPhase1Duration, card.returnPhase2Duration);
+                Debug.Log($"[HandSplineZone] 卡牌开始二段式返回: {card.name}, 阶段1: {card.returnPhase1Duration}秒, 阶段2: {card.returnPhase2Duration}秒");
+            }
             return true;
         }
 
