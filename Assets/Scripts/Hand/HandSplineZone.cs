@@ -69,10 +69,29 @@ namespace EndfieldFrontierTCG.Hand
 		[Tooltip("开始拖拽所需的最短按住时间（秒）")]
 		public float pressHoldThresholdSec = 0.12f;
 
-		[Header("Return-to-Home")]
-		public float returnAheadZ = 0.2f;
-		public float returnPhase1 = 0.15f;
-		public float returnPhase2 = 0.18f;
+[Header("Return-to-Home")]
+        [Tooltip("第一阶段：XZ平面移动的速度曲线（0→1）\n值越大移动越快\n建议范围：0.2-1.0")]
+        public AnimationCurve returnPhase1Curve = new AnimationCurve(
+            new Keyframe(0f, 0.2f, 0f, 2f),      // 开始时快速加速
+            new Keyframe(0.3f, 0.8f, 1f, 1f),    // 30%时达到80%速度
+            new Keyframe(0.7f, 0.8f, 0f, 0f),    // 70%时保持80%速度
+            new Keyframe(1f, 0.2f, -2f, 0f)      // 最后平滑减速
+        );
+
+        [Tooltip("第二阶段：回到手牌的速度曲线（0→1）\n值越大移动越快\n建议范围：0.2-1.0")]
+        public AnimationCurve returnPhase2Curve = new AnimationCurve(
+            new Keyframe(0f, 0.2f, 0f, 1f),      // 开始时缓慢加速
+            new Keyframe(0.4f, 0.9f, 1f, 1f),    // 40%时达到90%速度
+            new Keyframe(0.6f, 0.9f, 0f, 0f),    // 60%时保持90%速度
+            new Keyframe(1f, 0.2f, -2f, 0f)      // 最后平滑减速
+        );
+
+        [Tooltip("前向偏移距离（米）")]
+        public float returnAheadZ = 0.2f;
+        [Tooltip("第一阶段持续时间（秒）")]
+        public float returnPhase1 = 0.15f;
+        [Tooltip("第二阶段持续时间（秒）")]
+        public float returnPhase2 = 0.18f;
 
 		[Header("Debug")] public bool debugLogs = false;
 		[Header("Build")]

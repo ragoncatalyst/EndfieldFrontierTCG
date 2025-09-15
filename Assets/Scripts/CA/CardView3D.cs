@@ -501,9 +501,23 @@ public class CardView3D : MonoBehaviour
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1);
 
-            // 使用简单的线性插值
+            // 获取当前速度系数（0-1范围）
+            var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+            float speedFactor = handZone != null ? handZone.returnPhase1Curve.Evaluate(a) : a;
+
+            // 计算当前位置到目标的方向和距离
             Vector2 currentXZ = new Vector2(transform.position.x, transform.position.z);
-            Vector2 newXZ = Vector2.Lerp(currentXZ, tempXZ2, a);
+            Vector2 toTarget = tempXZ2 - currentXZ;
+            float distanceToTarget = toTarget.magnitude;
+            
+            // 使用速度系数直接控制移动
+            float baseSpeed = 5f; // 基础速度
+            float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
+            float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
+            
+            // 平滑过渡到目标速度
+            velocity = Vector2.Lerp(velocity, toTarget.normalized * targetSpeed, Time.deltaTime * 10f);
+            Vector2 newXZ = currentXZ + velocity * Time.deltaTime;
 
             // 应用位置（保持Y不变）和旋转
             transform.position = new Vector3(newXZ.x, currentY, newXZ.y);
@@ -543,8 +557,23 @@ public class CardView3D : MonoBehaviour
             tP2 += Time.deltaTime;
             float a = Mathf.Clamp01(tP2 / dur2);
 
-            // 使用简单的线性插值
-            Vector3 newPos = Vector3.Lerp(transform.position, endP2, a);
+            // 获取当前速度系数（0-1范围）
+            var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+            float speedFactor = handZone != null ? handZone.returnPhase2Curve.Evaluate(a) : a;
+
+            // 计算当前位置到目标的方向和距离
+            Vector3 toTarget = endP2 - transform.position;
+            toTarget.y = homeY - transform.position.y; // 确保Y轴也平滑移动
+            float distanceToTarget = toTarget.magnitude;
+
+            // 使用速度系数直接控制移动
+            float baseSpeed = 4f; // 基础速度
+            float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
+            float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
+            
+            // 平滑过渡到目标速度
+            velocity3D = Vector3.Lerp(velocity3D, toTarget.normalized * targetSpeed, Time.deltaTime * 8f);
+            Vector3 newPos = transform.position + velocity3D * Time.deltaTime;
 
             // 应用位置和旋转
             transform.position = newPos;
