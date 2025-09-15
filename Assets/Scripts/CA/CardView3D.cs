@@ -70,26 +70,6 @@ public class CardView3D : MonoBehaviour
     public float dropDuration = 0.25f;
 
     [Header("Two-Phase Return Animation")]
-    [Header("Phase 1 - Move to Front")]
-    [Tooltip("第一阶段：XZ平面移动的速度曲线（0→1）\n值越大移动越快\n建议范围：0.2-1.0")]
-    [SerializeField]
-    public AnimationCurve returnPhase1SpeedCurve = new AnimationCurve(
-        new Keyframe(0f, 0.2f, 0f, 2f),      // 开始时快速加速
-        new Keyframe(0.3f, 0.8f, 1f, 1f),    // 30%时达到80%速度
-        new Keyframe(0.7f, 0.8f, 0f, 0f),    // 70%时保持80%速度
-        new Keyframe(1f, 0.2f, -2f, 0f)      // 最后平滑减速
-    );
-
-    [Header("Phase 2 - Return to Hand")]
-    [Tooltip("第二阶段：回到手牌的速度曲线（0→1）\n值越大移动越快\n建议范围：0.2-1.0")]
-    [SerializeField]
-    public AnimationCurve returnPhase2SpeedCurve = new AnimationCurve(
-        new Keyframe(0f, 0.2f, 0f, 1f),      // 开始时缓慢加速
-        new Keyframe(0.4f, 0.9f, 1f, 1f),    // 40%时达到90%速度
-        new Keyframe(0.6f, 0.9f, 0f, 0f),    // 60%时保持90%速度
-        new Keyframe(1f, 0.2f, -2f, 0f)      // 最后平滑减速
-    );
-
     [SerializeField]
     [Tooltip("第一阶段的持续时间（秒）")]
     private float _returnPhase1Duration = 0.2f;
@@ -521,22 +501,9 @@ public class CardView3D : MonoBehaviour
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1);
 
-            // 获取当前速度系数（0-1范围）
-            float speedFactor = returnPhase1SpeedCurve.Evaluate(a);
-
-            // 计算当前位置到目标的方向和距离
+            // 使用简单的线性插值
             Vector2 currentXZ = new Vector2(transform.position.x, transform.position.z);
-            Vector2 toTarget = tempXZ2 - currentXZ;
-            float distanceToTarget = toTarget.magnitude;
-            
-            // 使用速度系数直接控制移动
-            float baseSpeed = 5f; // 基础速度
-            float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
-            float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
-            
-            // 平滑过渡到目标速度
-            velocity = Vector2.Lerp(velocity, toTarget.normalized * targetSpeed, Time.deltaTime * 10f);
-            Vector2 newXZ = currentXZ + velocity * Time.deltaTime;
+            Vector2 newXZ = Vector2.Lerp(currentXZ, tempXZ2, a);
 
             // 应用位置（保持Y不变）和旋转
             transform.position = new Vector3(newXZ.x, currentY, newXZ.y);
@@ -576,22 +543,8 @@ public class CardView3D : MonoBehaviour
             tP2 += Time.deltaTime;
             float a = Mathf.Clamp01(tP2 / dur2);
 
-            // 获取当前速度系数（0-1范围）
-            float speedFactor = returnPhase2SpeedCurve.Evaluate(a);
-
-            // 计算当前位置到目标的方向和距离
-            Vector3 toTarget = endP2 - transform.position;
-            toTarget.y = homeY - transform.position.y; // 确保Y轴也平滑移动
-            float distanceToTarget = toTarget.magnitude;
-
-            // 使用速度系数直接控制移动
-            float baseSpeed = 4f; // 基础速度
-            float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
-            float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
-            
-            // 平滑过渡到目标速度
-            velocity3D = Vector3.Lerp(velocity3D, toTarget.normalized * targetSpeed, Time.deltaTime * 8f);
-            Vector3 newPos = transform.position + velocity3D * Time.deltaTime;
+            // 使用简单的线性插值
+            Vector3 newPos = Vector3.Lerp(transform.position, endP2, a);
 
             // 应用位置和旋转
             transform.position = newPos;
