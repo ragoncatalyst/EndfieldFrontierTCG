@@ -544,7 +544,7 @@ public class CardView3D : MonoBehaviour
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, 速度: {speed:F2}, 位置: {newXZ}");
+                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, 速度: {targetSpeed:F2}, 位置: {newXZ}");
             }
 
             yield return null;
@@ -599,7 +599,7 @@ public class CardView3D : MonoBehaviour
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 速度: {speed:F2}, 位置: {newPos}");
+                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 速度: {targetSpeed:F2}, 位置: {newPos}");
             }
 
             yield return null;
