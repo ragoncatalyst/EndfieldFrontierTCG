@@ -35,9 +35,9 @@ namespace EndfieldFrontierTCG.Board
             if (acceptOnlyEmpty && IsOccupied) return false;
             CurrentCard = card;
             card.SetHomePose(transform.position, transform.rotation);
-            // 若 t1/t2 传入为 0，退回到卡牌自己的 snapReturnPhase1/2
-            float p1 = (t1 > 0f ? t1 : card.snapReturnPhase1);
-            float p2 = (t2 > 0f ? t2 : card.snapReturnPhase2);
+            // 若 t1/t2 传入为 0，退回到卡牌自己的 returnPhase1Duration/returnPhase2Duration
+            float p1 = (t1 > 0f ? t1 : card.returnPhase1Duration);
+            float p2 = (t2 > 0f ? t2 : card.returnPhase2Duration);
             card.BeginSmoothReturnToHome(aheadZ, p1, p2);
             return true;
         }

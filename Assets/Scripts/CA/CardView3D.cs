@@ -914,8 +914,8 @@ public class CardView3D : MonoBehaviour
                 }
 
             // 如果没有找到槽位，检查是否在手牌区域
-            var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-            if (handZone != null && _homeSet)
+            var currentHandZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+            if (currentHandZone != null && _homeSet)
             {
                 // 使用配置的二段式返回动画
                 BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
