@@ -70,41 +70,21 @@ public class CardView3D : MonoBehaviour
     public float dropDuration = 0.25f;
 
     [Header("Two-Phase Return Animation")]
-    [SerializeField]
     [Tooltip("第一阶段：XZ平面移动的速度曲线（0→1）\n- 开始时快速加速\n- 中间平稳移动\n- 结束时平滑减速")]
-    private AnimationCurve _returnPhase1XZCurve = new AnimationCurve(
-        new Keyframe(0f, 0f, 0f, 2f),      // 开始时快速加速
-        new Keyframe(0.3f, 0.7f, 1f, 1f),  // 30%时完成70%的移动
-        new Keyframe(0.7f, 0.9f, 0.5f, 0.5f), // 70%时完成90%的移动
-        new Keyframe(1f, 1f, 0f, 0f)       // 平滑结束
+    public AnimationCurve returnPhase1XZCurve = new AnimationCurve(
+        new Keyframe(0f, 0.2f, 0f, 2f),      // 开始时快速加速
+        new Keyframe(0.3f, 0.8f, 1f, 1f),    // 30%时达到80%速度
+        new Keyframe(0.7f, 0.8f, 0f, 0f),    // 70%时保持80%速度
+        new Keyframe(1f, 0.2f, -2f, 0f)      // 最后平滑减速
     );
-    public AnimationCurve returnPhase1XZCurve
-    {
-        get => _returnPhase1XZCurve;
-        set
-        {
-            _returnPhase1XZCurve = value;
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第一阶段移动曲线: {value}");
-        }
-    }
 
-    [SerializeField]
     [Tooltip("第二阶段：回到最终位置的速度曲线（0→1）\n- 开始时缓慢加速\n- 中间快速移动\n- 结束时平滑减速")]
-    private AnimationCurve _returnPhase2Curve = new AnimationCurve(
-        new Keyframe(0f, 0f, 0f, 0.5f),    // 开始时缓慢加速
-        new Keyframe(0.4f, 0.6f, 1.5f, 1.5f), // 40%时完成60%的移动
-        new Keyframe(0.8f, 0.95f, 0.8f, 0.5f), // 80%时几乎完成
-        new Keyframe(1f, 1f, 0f, 0f)       // 平滑结束
+    public AnimationCurve returnPhase2Curve = new AnimationCurve(
+        new Keyframe(0f, 0.2f, 0f, 1f),      // 开始时缓慢加速
+        new Keyframe(0.4f, 0.9f, 1f, 1f),    // 40%时达到90%速度
+        new Keyframe(0.6f, 0.9f, 0f, 0f),    // 60%时保持90%速度
+        new Keyframe(1f, 0.2f, -2f, 0f)      // 最后平滑减速
     );
-    public AnimationCurve returnPhase2Curve
-    {
-        get => _returnPhase2Curve;
-        set
-        {
-            _returnPhase2Curve = value;
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第二阶段曲线: {value}");
-        }
-    }
 
     [SerializeField]
     [Tooltip("第一阶段的持续时间（秒）")]
@@ -525,7 +505,7 @@ public class CardView3D : MonoBehaviour
         Vector2 startXZ = new Vector2(startPos.x, startPos.z);
         Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
         float currentY = startPos.y; // 保持当前高度
-        Vector2 currentVelocityXZ = Vector2.zero;
+        Vector2 velocity = Vector2.zero;
 
         if (debugHoverLogs)
         {
@@ -538,20 +518,16 @@ public class CardView3D : MonoBehaviour
             float a = Mathf.Clamp01(t / dur1);
 
             // 获取当前速度系数
-            float speedMultiplier = _returnPhase1XZCurve.Evaluate(a);
+            float speed = returnPhase1XZCurve.Evaluate(a);
 
-            // 计算目标位置
-            Vector2 targetXZ = Vector2.Lerp(startXZ, tempXZ2, a);
-
-            // 使用SmoothDamp进行速度控制的移动
+            // 计算当前位置到目标的方向
             Vector2 currentXZ = new Vector2(transform.position.x, transform.position.z);
-            Vector2 newXZ = Vector2.SmoothDamp(
-                currentXZ,
-                targetXZ,
-                ref currentVelocityXZ,
-                dur1 * (1f - speedMultiplier), // 速度越大，平滑时间越短
-                20f * speedMultiplier // 速度越大，最大速度越高
-            );
+            Vector2 toTarget = tempXZ2 - currentXZ;
+            
+            // 使用速度系数直接控制移动
+            float moveSpeed = speed * 5f; // 基础速度的5倍
+            velocity = Vector2.Lerp(velocity, toTarget.normalized * moveSpeed, Time.deltaTime * 10f);
+            Vector2 newXZ = currentXZ + velocity * Time.deltaTime;
 
             // 应用位置（保持Y不变）和旋转
             transform.position = new Vector3(newXZ.x, currentY, newXZ.y);
@@ -559,7 +535,7 @@ public class CardView3D : MonoBehaviour
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, 速度: {speedMultiplier:F2}, 位置: {newXZ}");
+                Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, 速度: {speed:F2}, 位置: {newXZ}");
             }
 
             yield return null;
@@ -575,11 +551,11 @@ public class CardView3D : MonoBehaviour
         Vector3 endP2 = new Vector3(_homePos.x, homeY, _homePos.z);
         float dur2 = Mathf.Max(0.01f, returnPhase2Duration);
         float tP2 = 0f;
-        Vector3 currentVelocity = Vector3.zero;
+        Vector3 velocity3D = Vector3.zero;
 
         // 添加前向偏移，避免被相邻卡片遮挡
         Vector3 cameraForward = CameraForwardPlanar();
-        startP2 += cameraForward * _returnFrontBias;
+        startP2 += cameraForward * returnFrontBias;
 
         if (debugHoverLogs)
         {
@@ -592,28 +568,24 @@ public class CardView3D : MonoBehaviour
             float a = Mathf.Clamp01(tP2 / dur2);
 
             // 获取当前速度系数
-            float speedMultiplier = _returnPhase2Curve.Evaluate(a);
+            float speed = returnPhase2Curve.Evaluate(a);
 
-            // 计算目标位置
-            Vector3 targetPos = Vector3.Lerp(startP2, endP2, a);
-            targetPos.y = homeY; // 保持Y恒定
+            // 计算当前位置到目标的方向
+            Vector3 toTarget = endP2 - transform.position;
+            toTarget.y = homeY - transform.position.y; // 确保Y轴也平滑移动
 
-            // 使用SmoothDamp进行速度控制的移动
-            Vector3 newPos = Vector3.SmoothDamp(
-                transform.position,
-                targetPos,
-                ref currentVelocity,
-                dur2 * (1f - speedMultiplier), // 速度越大，平滑时间越短
-                15f * speedMultiplier // 速度越大，最大速度越高
-            );
+            // 使用速度系数直接控制移动
+            float moveSpeed = speed * 4f; // 基础速度的4倍
+            velocity3D = Vector3.Lerp(velocity3D, toTarget.normalized * moveSpeed, Time.deltaTime * 8f);
+            Vector3 newPos = transform.position + velocity3D * Time.deltaTime;
 
             // 应用位置和旋转
             transform.position = newPos;
             transform.rotation = Quaternion.Slerp(startR2, _homeRot, a);
 
-            if (debugHoverLogs && tP2 % 0.1f < Time.deltaTime)
+            if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
-                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 速度: {speedMultiplier:F2}, 位置: {newPos}");
+                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 速度: {speed:F2}, 位置: {newPos}");
             }
 
             yield return null;
