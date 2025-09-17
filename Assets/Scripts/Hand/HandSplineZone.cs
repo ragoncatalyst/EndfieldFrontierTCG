@@ -825,8 +825,58 @@ namespace EndfieldFrontierTCG.Hand
 			if (idx-1 >= 0) left = list[idx-1];
 			if (idx+1 < list.Count) right = list[idx+1];
 		}
+
+        [SerializeField] private float returnPhase1Duration = 0.5f;
+        [SerializeField] private float returnPhase2Duration = 0.5f;
+
+        private IEnumerator SmoothMoveToSlot(CardSlotBehaviour slot)
+        {
+            float t = 0f;
+            float duration = Mathf.Max(0.0001f, returnPhase1Duration + returnPhase2Duration);
+            Vector3 startPos = transform.position;
+            Vector3 targetPos = slot.GetCardPosition();
+            Quaternion startRot = transform.rotation;
+            Quaternion targetRot = slot.GetCardRotation();
+
+            while (t < duration)
+            {
+                t += Time.deltaTime;
+                float progress = Mathf.Clamp01(t / duration);
+
+                // --- changed: treat curves as S(u) progress curves (0->1) per phase, not velocity ---
+                float f1 = Mathf.Clamp01(returnPhase1Duration / duration);
+                float f2 = 1f - f1;
+
+                float phaseProgress;
+                float smoothedProgress;
+
+                if (progress <= f1 || f2 <= 0f)
+                {
+                    // in phase1 (or only one phase)
+                    phaseProgress = (f1 > 0f) ? Mathf.Clamp01(progress / f1) : 1f;
+                    smoothedProgress = Mathf.Clamp01(returnPhase1Curve.Evaluate(phaseProgress) * f1);
+                }
+                else
+                {
+                    // in phase2
+                    phaseProgress = Mathf.Clamp01((progress - f1) / f2);
+                    smoothedProgress = f1 + Mathf.Clamp01(returnPhase2Curve.Evaluate(phaseProgress) * f2);
+                }
+
+                // ensure monotonic and clamped
+                smoothedProgress = Mathf.Clamp01(smoothedProgress);
+
+                // Smoothly interpolate position and rotation using progress (S-t)
+                transform.position = Vector3.Lerp(startPos, targetPos, smoothedProgress);
+                transform.rotation = Quaternion.Lerp(startRot, targetRot, smoothedProgress);
+
+                yield return null;
+            }
+
+            // Ensure final position and rotation are set
+            transform.position = targetPos;
+            transform.rotation = targetRot;
+        }
 	}
 }
-
-
 
