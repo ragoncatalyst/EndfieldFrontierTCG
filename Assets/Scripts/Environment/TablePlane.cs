@@ -64,9 +64,21 @@ namespace EndfieldFrontierTCG.Environment
 		{
 			if (_mr == null) return;
 			var mat = _mr.sharedMaterial;
-			if (mat == null || mat.shader == null || mat.shader.name != "Standard")
+			var urpLit = Shader.Find("Universal Render Pipeline/Lit");
+			var urpSimple = Shader.Find("Universal Render Pipeline/Simple Lit");
+			var targetShader = urpLit != null ? urpLit : urpSimple;
+
+			if (mat == null || mat.shader == null)
 			{
-				mat = new Material(Shader.Find("Standard"));
+				if (targetShader != null)
+					mat = new Material(targetShader);
+				else
+					mat = new Material(Shader.Find("Standard"));
+				_mr.sharedMaterial = mat;
+			}
+			else if (mat.shader.name == "Standard" && targetShader != null)
+			{
+				mat.shader = targetShader;
 				_mr.sharedMaterial = mat;
 			}
 
@@ -124,5 +136,4 @@ namespace EndfieldFrontierTCG.Environment
 		}
 	}
 }
-
 

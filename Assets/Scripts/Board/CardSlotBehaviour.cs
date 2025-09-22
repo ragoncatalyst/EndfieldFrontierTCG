@@ -90,19 +90,20 @@ namespace EndfieldFrontierTCG.Board
             try
             {
                 _currentCard = card;
-                
+
+                // 计算目标姿态（保持在槽面上方）
+                GetPlacementForCard(card, out Vector3 targetPos, out Quaternion targetRot);
+
                 // 先从原来的父物体中移除
                 card.transform.SetParent(null);
-                
+
                 // 设置新的父物体
                 card.transform.SetParent(transform, true);
-                
-                // 使用卡牌的 SnapTo 方法来设置位置和旋转
-                Vector3 targetPos = transform.position;
-                Quaternion targetRot = transform.rotation * Quaternion.Euler(-90f, 0f, 0f); // 调整为卡牌的正确朝向
+
                 Debug.Log($"[CardSlotBehaviour] 设置卡牌旋转: {targetRot.eulerAngles}");
                 card.SnapTo(targetPos, targetRot);
-                
+                card.AlignToSlotSurface(this);
+
                 // 确保卡牌的状态正确
                 if (card.GetComponent<Rigidbody>() is Rigidbody rb)
                 {
@@ -155,18 +156,42 @@ namespace EndfieldFrontierTCG.Board
 
         public Vector3 GetCardPosition()
         {
-            // 返回卡牌应该放置的精确位置
-            return transform.position;
+            GetPlacementForCard(null, out Vector3 pos, out _);
+            return pos;
         }
 
         public Quaternion GetCardRotation()
         {
-            // 返回卡牌应该旋转到的精确角度
-            // 1. 旋转-90度让卡牌平放并正面朝上
-            // 2. 不需要Y轴旋转，保持卡牌正面朝向摄像机
-            // 3. 最后根据槽位的朝向旋转
-            return transform.rotation * Quaternion.Euler(-90f, 0f, 0f);
+            GetPlacementForCard(null, out _, out Quaternion rot);
+            return rot;
         }
+
+        public void GetPlacementForCard(CardView3D card, out Vector3 position, out Quaternion rotation)
+        {
+            rotation = transform.rotation * Quaternion.Euler(-90f, 0f, 0f);
+
+            float surfaceY = GetSurfaceWorldY();
+            float minY = -DefaultCardHalfThickness;
+            if (card != null)
+            {
+                card.GetPlacementExtents(rotation, out minY, out _);
+            }
+
+            float pivotToBottom = Mathf.Max(0f, -minY);
+            position = new Vector3(transform.position.x, surfaceY + pivotToBottom, transform.position.z);
+        }
+
+        public float GetSurfaceWorldY()
+        {
+            if (_collider == null)
+            {
+                return transform.position.y;
+            }
+
+            return _collider.bounds.max.y;
+        }
+
+        private const float DefaultCardHalfThickness = 0.01f;
 
         public void OnHoverEnter()
         {

@@ -18,6 +18,7 @@ public class CardView3D : MonoBehaviour
     public TMP_Text HPText;
     public TMP_Text ATKText;
     public Texture2D MainTextureCache;
+    private const float DefaultPlacementHalfThickness = 0.01f;
     [Header("Debug")]
     public bool debugHoverLogs = true;
     [SerializeField] private string cardViewRevision = "cv_rev_2025-09-03_01";
@@ -50,6 +51,31 @@ public class CardView3D : MonoBehaviour
     public float followLiftScale = 0.02f;
     [Tooltip("上升位移的最大值（米）")]
     public float followLiftMax = 0.12f;
+
+    [Header("Drag Lean Limits")]
+    [Tooltip("绕本地 X 轴的最大前后倾角（度）")]
+    public float leanMaxPitchDeg = 40f;
+    [Tooltip("绕本地 Y 轴的最大左右扭转角（度）")]
+    public float leanMaxYawDeg = 20f;
+    [Tooltip("绕本地 Z 轴的最大左右倾角（度）")]
+    public float leanMaxRollDeg = 40f;
+    [Tooltip("速度映射到 Pitch 倾角的增益（度/单位速度）")]
+    public float leanPitchGain = 90f;
+    [Tooltip("速度映射到 Yaw 扭转的增益（度/单位速度）")]
+    public float leanYawGain = 30f;
+    [Tooltip("速度映射到 Roll 倾角的增益（度/单位速度）")]
+    public float leanRollGain = 90f;
+    [Tooltip("鼠标指针移动速度映射到倾斜强度的增益（单位速度 -> 0..1）")]
+    public float pointerLeanSpeedGain = 6f;
+    [Tooltip("当鼠标静止时倾斜强度衰减的速度（1/秒）")]
+    public float pointerLeanRelax = 6f;
+    [Tooltip("鼠标局部位置插值过滤频率（1/秒），值越大响应越快")]
+    public float pointerLeanFilter = 16f;
+    [Header("Wobble Timing")]
+    [Tooltip("拖拽速度低于阈值后，需要保持静止多长时间才开始晃动（秒）")]
+    public float wobbleStartDelay = 0.25f;
+    [Tooltip("拖拽速度重新升高后，多少秒后才允许再次进入晃动（秒）")]
+    public float wobbleCooldown = 0.25f;
 
     [Header("Wobble (Low-speed)")]
     public float wobbleAmpDeg = 3f; // 降低 y 轴等整体摆动感
@@ -169,6 +195,16 @@ public class CardView3D : MonoBehaviour
     private float _startBoostT = 0f;
     private float _mouseDownTime = 0f;
     private Vector3 _mouseDownPos;
+    private Vector3 _lastPointerWS = Vector3.zero;
+    private Vector3 _lastCenterWS = Vector3.zero;
+    private bool _hasPointerAnchor = false;
+    private float _pointerWorldSpeed = 0f;
+    private Vector2 _pointerLocalNorm = Vector2.zero;
+    private Vector2 _pointerLocalPlanar = Vector2.zero;
+    private Vector2 _pointerLocalPlanarPrev = Vector2.zero;
+    private float _pointerAngle = 0f;
+    private float _wobbleIdleTimer = 0f;
+    private float _wobbleCooldownTimer = 0f;
 
     // Home pose for hand return
     private Vector3 _homePos;
@@ -391,6 +427,91 @@ public class CardView3D : MonoBehaviour
         {
             Debug.Log($"[CardView3D] 设置家位置 - 世界坐标: {worldPos}, 本地坐标: {_homeLocalPos}, 父级: {(zone != null ? zone.name : "无")}");
         }
+    }
+
+    public void GetPlacementExtents(Quaternion targetRotation, out float minY, out float maxY)
+    {
+        if (box != null)
+        {
+            Vector3 lossy = transform.lossyScale;
+            Vector3 scaledCenter = new Vector3(box.center.x * lossy.x, box.center.y * lossy.y, box.center.z * lossy.z);
+            Vector3 scaledHalf = new Vector3(box.size.x * 0.5f * lossy.x, box.size.y * 0.5f * lossy.y, box.size.z * 0.5f * lossy.z);
+
+            minY = float.PositiveInfinity;
+            maxY = float.NegativeInfinity;
+
+            for (int ix = -1; ix <= 1; ix += 2)
+            {
+                for (int iy = -1; iy <= 1; iy += 2)
+                {
+                    for (int iz = -1; iz <= 1; iz += 2)
+                    {
+                        Vector3 cornerLocal = scaledCenter + new Vector3(scaledHalf.x * ix, scaledHalf.y * iy, scaledHalf.z * iz);
+                        float y = (targetRotation * cornerLocal).y;
+                        if (y < minY) minY = y;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+            }
+
+            if (float.IsInfinity(minY) || float.IsInfinity(maxY))
+            {
+                minY = -DefaultPlacementHalfThickness;
+                maxY = DefaultPlacementHalfThickness;
+            }
+            return;
+        }
+
+        minY = -DefaultPlacementHalfThickness;
+        maxY = DefaultPlacementHalfThickness;
+    }
+
+    public void AlignToSlotSurface(CardSlotBehaviour slot)
+    {
+        if (slot == null) return;
+        if (!TryGetWorldBounds(out Bounds bounds)) return;
+
+        float surfaceY = slot.GetSurfaceWorldY();
+        float bottom = bounds.min.y;
+        float delta = surfaceY - bottom;
+        if (Mathf.Abs(delta) < 0.0001f) return;
+
+        transform.position += Vector3.up * delta;
+
+        if (_homeSet)
+        {
+            SetHomePose(transform.position, transform.rotation);
+        }
+    }
+
+    private bool TryGetWorldBounds(out Bounds bounds)
+    {
+        if (box != null)
+        {
+            bounds = box.bounds;
+            return true;
+        }
+
+        var rends = GetComponentsInChildren<Renderer>(true);
+        bool hasBounds = false;
+        bounds = new Bounds();
+        for (int i = 0; i < rends.Length; i++)
+        {
+            var r = rends[i];
+            if (r == null) continue;
+
+            if (!hasBounds)
+            {
+                bounds = r.bounds;
+                hasBounds = true;
+            }
+            else
+            {
+                bounds.Encapsulate(r.bounds);
+            }
+        }
+
+        return hasBounds;
     }
 
     private void GetHomeWorldPose(out Vector3 pos, out Quaternion rot)
@@ -654,7 +775,15 @@ public class CardView3D : MonoBehaviour
                 MainTextureCache = tex;
                 if (MainRenderer.material != null)
                 {
-                    MainRenderer.material.mainTexture = tex;
+                    var mat = MainRenderer.material;
+                    var unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
+                    if (unlitShader != null && mat.shader != null && mat.shader.name != "Universal Render Pipeline/Unlit")
+                    {
+                        mat.shader = unlitShader;
+                    }
+                    if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
+                    else mat.mainTexture = tex;
+                    if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", Color.white);
                 }
             }
         }
@@ -801,11 +930,14 @@ public class CardView3D : MonoBehaviour
             _dragVel = Vector3.Lerp(_dragVel, inst / Mathf.Max(0.0001f, Time.deltaTime), 0.35f);
             _lastTarget = target;
 
+            Vector3 centerWSCurrent = transform.TransformPoint(box != null ? box.center : Vector3.zero);
+            UpdateDragPointerAnchor(centerWSCurrent, pt);
+
             ApplyFollowLean(_dragVel);
             // 首次确定摇晃方向：用 box 中心到当前命中点的 r，与平面速度 F 的叉积的 y 符号
             if (!_wobbleDirSet && box != null)
             {
-                Vector3 centerWS = transform.TransformPoint(box.center);
+                Vector3 centerWS = centerWSCurrent;
                 Vector3 r = (target - centerWS);
                 Vector3 F = Vector3.ProjectOnPlane(_dragVel.sqrMagnitude > 1e-6f ? _dragVel : (target - transform.position) / Mathf.Max(0.0001f, Time.deltaTime), Vector3.up);
                 float s = Vector3.Dot(Vector3.Cross(r, F), Vector3.up);
@@ -818,6 +950,32 @@ public class CardView3D : MonoBehaviour
             }
             GateWobbleBySpeed(_dragVel);
         }
+    }
+
+    private void UpdateDragPointerAnchor(Vector3 centerWS, Vector3 fallbackPoint)
+    {
+        Vector3 pointerWS = fallbackPoint;
+        Camera cam = _cam != null ? _cam : (Camera.main != null ? Camera.main : Camera.current);
+        if (cam != null)
+        {
+            Ray ray = cam.ScreenPointToRay(Input.mousePosition);
+            if (Physics.Raycast(ray, out RaycastHit hit, 1000f, interactLayerMask, QueryTriggerInteraction.Collide))
+            {
+                var cv = hit.collider != null ? hit.collider.GetComponentInParent<CardView3D>() : null;
+                if (cv == this)
+                {
+                    pointerWS = hit.point;
+                }
+            }
+        }
+
+        float dt = Mathf.Max(Time.deltaTime, 0.0001f);
+        float rawSpeed = _hasPointerAnchor ? Vector3.Distance(pointerWS, _lastPointerWS) / dt : 0f;
+        _pointerWorldSpeed = Mathf.Lerp(_pointerWorldSpeed, rawSpeed, Mathf.Clamp01(pointerLeanFilter * dt));
+
+        _lastCenterWS = centerWS;
+        _lastPointerWS = pointerWS;
+        _hasPointerAnchor = true;
     }
 
     private Vector3 CameraForwardPlanar()
@@ -924,67 +1082,35 @@ public class CardView3D : MonoBehaviour
             // 使用射线检测所有可能的槽位
             var ray = Camera.main.ScreenPointToRay(Input.mousePosition);
             var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
-            
+
             // 找到最近的可用槽位
             CardSlotBehaviour nearestSlot = null;
             float nearestDistance = float.MaxValue;
-            Vector3 mouseWorldPos = Vector3.zero;
 
             foreach (var hit in hits)
             {
-                // 检查是否击中了槽位
                 var slot = hit.collider.GetComponent<CardSlotBehaviour>();
-                if (slot != null)
+                if (slot == null) continue;
+                float distance = Vector3.Distance(transform.position, slot.transform.position);
+                if (distance < nearestDistance)
                 {
-                    float distance = Vector3.Distance(transform.position, slot.transform.position);
-                    if (distance < nearestDistance)
-                    {
-                        nearestDistance = distance;
-                        nearestSlot = slot;
-                        mouseWorldPos = hit.point;
-                    }
+                    nearestDistance = distance;
+                    nearestSlot = slot;
                 }
             }
 
-                // 如果找到了槽位，平滑移动过去
-                if (nearestSlot != null)
-                {
-                    Debug.Log($"[CardView3D] 找到最近的槽位: {nearestSlot.name}, 距离: {nearestDistance}");
-                    
-                    // 记录当前世界空间位置和旋转
-                    Vector3 currentWorldPos = transform.position;
-                    Quaternion currentWorldRot = transform.rotation;
-                    
-                    // 断开与所有手牌区域的联系
-                    var allHandZones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
-                    foreach (var handZone in allHandZones)
-                    {
-                        if (handZone != null)
-                        {
-                            handZone.ClearInputState();
-                            handZone.UnregisterCard(this); // 从手牌区域注销这张卡
-                        }
-                    }
-                    
-                    // 确保不会被手牌区域重新认领
-                    transform.SetParent(null);
-                    _homeSet = false;
-                    handIndex = -1; // 清除手牌索引
-                    
-                    // 恢复到记录的位置，确保从正确的位置开始移动
-                    transform.position = currentWorldPos;
-                    transform.rotation = currentWorldRot;
-                    
-                    StartCoroutine(SmoothMoveToSlot(nearestSlot));
-                    return;
-                }
-
-            // 如果没有找到槽位，检查是否在手牌区域
             var currentHandZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-            if (currentHandZone != null && _homeSet)
+
+            if (nearestSlot != null)
             {
-                // 使用配置的二段式返回动画
-                BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
+                Debug.Log($"[CardView3D] 找到最近的槽位: {nearestSlot.name}, 距离: {nearestDistance}");
+                currentHandZone?.ClearInputState();
+                StartCoroutine(SmoothMoveToSlot(nearestSlot, currentHandZone));
+                return;
+            }
+
+            if (currentHandZone != null && currentHandZone.TryReturnCardToHome(this))
+            {
                 return;
             }
 
@@ -992,167 +1118,164 @@ public class CardView3D : MonoBehaviour
             StartCoroutine(ReleaseDrop());
         }
 
-        private IEnumerator SmoothMoveToSlot(CardSlotBehaviour slot)
+        private IEnumerator SmoothMoveToSlot(CardSlotBehaviour slot, EndfieldFrontierTCG.Hand.HandSplineZone originZone)
         {
             if (slot == null) yield break;
 
-            // 先通知槽位我们要放置卡牌，让它做好准备
             if (!slot.CanAcceptCard(this))
             {
                 Debug.LogWarning($"[CardView3D] 槽位 {slot.name} 无法接受卡牌");
+                if (originZone != null && originZone.TryReturnCardToHome(this)) yield break;
+                if (_homeSet)
+                {
+                    BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
+                    yield break;
+                }
+                yield return ReleaseDrop();
                 yield break;
             }
 
-            // 获取槽位的精确位置和旋转
-            Vector3 startPos = transform.position;
-            Vector3 targetPos = slot.GetCardPosition();
-            Quaternion startRot = transform.rotation;
-            Quaternion targetRot = slot.GetCardRotation();
-            
-            // 记录初始状态
-            var originalParent = transform.parent;
-            var originalLayer = gameObject.layer;
-            var originalState = _state;
-            
+            // 记录初始状态，便于失败时恢复
+            Transform originalParent = transform.parent;
+            int originalLayer = gameObject.layer;
+            DragState originalState = _state;
+
+            Transform savedHomeParent = _homeParent;
+            Vector3 savedHomeLocalPos = _homeLocalPos;
+            Quaternion savedHomeLocalRot = _homeLocalRot;
+            Vector3 savedHomePos = _homePos;
+            Quaternion savedHomeRot = _homeRot;
+            bool savedHomeSet = _homeSet;
+            int savedSlotIndex = slotIndex;
+            int savedHandIndex = handIndex;
+
+            bool placed = false;
+            IsReturningHome = true;
+
+            Rigidbody rb = body;
+            bool hasBody = rb != null;
+            bool prevDetect = false, prevGravity = false, prevKinematic = false;
+            RigidbodyConstraints prevConstraints = RigidbodyConstraints.FreezeAll;
+
+            if (hasBody)
+            {
+                prevDetect = rb.detectCollisions;
+                prevGravity = rb.useGravity;
+                prevKinematic = rb.isKinematic;
+                prevConstraints = rb.constraints;
+                rb.detectCollisions = false;
+                rb.useGravity = false;
+                rb.isKinematic = true;
+                rb.constraints = RigidbodyConstraints.FreezeAll;
+            }
+
             try
             {
-                // 设置状态为移动中
                 _state = DragState.Releasing;
-                
-                // 暂时禁用碰撞，避免移动过程中的干扰
-                if (body != null)
-                {
-                    body.isKinematic = true;
-                    body.detectCollisions = false;
-                }
-                
-                // 计算移动参数
-                float distance = Vector3.Distance(startPos, targetPos);
-                float moveTime = Mathf.Lerp(0.2f, 0.4f, distance / 2f); // 增加时间，让动画更平滑
-                float t = 0;
-                Vector3 currentVelocity = Vector3.zero;
-                
-                Debug.Log($"[CardView3D] 开始移动，当前世界位置: {transform.position}");
-                
-                // 记录当前世界空间位置和旋转
-                Vector3 worldReleasePos = transform.position;
-                Quaternion worldReleaseRot = transform.rotation;
-                
-                // 先计算在槽位空间中的起始位置
-                Vector3 startLocalPos = slot.transform.InverseTransformPoint(worldReleasePos);
-                Vector3 endLocalPos = Vector3.zero; // 槽位中心
-                
-                Debug.Log($"[CardView3D] 转换到本地空间的起始位置: {startLocalPos}");
-                
-                // 设置父物体，但保持世界位置不变
+
+                Vector3 startPos = transform.position;
+                Quaternion startRot = transform.rotation;
+                slot.GetPlacementForCard(this, out Vector3 targetPos, out Quaternion targetRot);
+
+                // 在槽位局部空间内进行插值动画
+                Vector3 releaseWorldPos = startPos;
+                Quaternion releaseWorldRot = startRot;
                 transform.SetParent(slot.transform, true);
-                
-                // 确保我们从正确的起始位置开始
-                transform.localPosition = startLocalPos;
-                
-                Debug.Log($"[CardView3D] 设置父物体后的本地位置: {transform.localPosition}");
-                
-                // 计算垂直下落的本地空间终点（保持XZ不变，只改变Y）
-                Vector3 dropLocalEndPos = new Vector3(startLocalPos.x, endLocalPos.y, startLocalPos.z);
-                
-                // 计算本地空间距离
-                float dropDistance = Mathf.Abs(startLocalPos.y - endLocalPos.y);
-                float slideDistance = Vector2.Distance(
-                    new Vector2(startLocalPos.x, startLocalPos.z),
-                    new Vector2(endLocalPos.x, endLocalPos.z)
-                );
-                
-                // 根据距离调整时间
-                float dropTime = Mathf.Lerp(0.15f, 0.3f, dropDistance / 1f);
-                
-                // 记录速度
-                Vector3 slideVelocity = Vector3.zero;
-                Vector3 currentLocalPos = startLocalPos;
-                
-                // 获取目标旋转
-                Quaternion endWorldRot = slot.GetCardRotation();
-                
-                float elapsedTime = 0f;
-                
-                while (elapsedTime < dropDuration)
+                Vector3 startLocalPos = slot.transform.InverseTransformPoint(releaseWorldPos);
+                Vector3 targetLocalPos = slot.transform.InverseTransformPoint(targetPos);
+
+                float duration = Mathf.Max(0.0001f, dropDuration);
+                float elapsed = 0f;
+                while (elapsed < duration)
                 {
-                    elapsedTime += Time.deltaTime;
-                    float progress = elapsedTime / dropDuration;
-                    
-                    // 使用曲线计算整体移动进度
-                    float moveProgress = dropCurve.Evaluate(progress);
-                    
-                    // 直接在所有轴向上进行插值，实现斜向下落
-                    Vector3 currentPos = Vector3.Lerp(startLocalPos, endLocalPos, moveProgress);
-                    transform.localPosition = currentPos;
-                    
-                    // 平滑旋转到目标角度
-                    transform.rotation = Quaternion.Slerp(transform.rotation, endWorldRot, moveProgress);
-                    
+                    elapsed += Time.deltaTime;
+                    float normalized = Mathf.Clamp01(elapsed / duration);
+                    float curveT = dropCurve != null ? dropCurve.Evaluate(normalized) : normalized;
+                    transform.localPosition = Vector3.LerpUnclamped(startLocalPos, targetLocalPos, curveT);
+                    transform.rotation = Quaternion.Slerp(releaseWorldRot, targetRot, curveT);
                     yield return null;
                 }
-                
-                // 确保最终位置和旋转完全精确
-                transform.position = targetPos;
+
+                transform.localPosition = targetLocalPos;
                 transform.rotation = targetRot;
-                
-                // 设置为新的家位置
-                SetHomePose(targetPos, targetRot);
-                
-                // 正式通知槽位放置完成
+                transform.position = targetPos;
+
                 if (slot.TryPlaceCard(this))
                 {
+                    placed = true;
                     Debug.Log($"[CardView3D] 成功放置到槽位: {slot.name}");
-                    _state = DragState.Idle;
-                    _homeSet = false; // 确保不会被手牌区域重新认领
-                    
-                    // 断开与所有手牌区域的联系
-                    var allHandZones = GameObject.FindObjectsOfType<EndfieldFrontierTCG.Hand.HandSplineZone>();
-                    foreach (var handZone in allHandZones)
+                    handIndex = -1;
+                    slotIndex = -1;
+                    _homeSet = false;
+
+                    if (originZone != null)
                     {
-                        if (handZone != null)
-                        {
-                            handZone.ClearInputState();
-                            // 如果这个卡牌在这个手牌区域中，移除它
-                            if (handZone.transform == transform.parent)
-                            {
-                                transform.SetParent(slot.transform);
-                            }
-                        }
+                        try { originZone.UnregisterCard(this); }
+                        catch { }
                     }
 
-                    // 强制设置父物体为槽位
                     transform.SetParent(slot.transform, true);
-                    
-                    // 禁用碰撞和物理，防止意外移动
-                    if (body != null)
+
+                    if (rb != null)
                     {
-                        body.isKinematic = true;
-                        body.detectCollisions = false;
-                        body.constraints = RigidbodyConstraints.FreezeAll;
+                        rb.isKinematic = true;
+                        rb.useGravity = false;
+                        rb.detectCollisions = false;
+                        rb.constraints = RigidbodyConstraints.FreezeAll;
                     }
-                    
-                    // 更新卡牌的家位置为槽位
-                    SetHomePose(targetPos, targetRot);
+
+                    SetHomePose(transform.position, transform.rotation);
+                    _state = DragState.Idle;
+                    yield break;
                 }
-                else
+
+                Debug.LogError($"[CardView3D] 放置失败: {slot.name}");
+
+                // 失败：恢复原始父级/状态
+                transform.SetParent(originalParent, true);
+                transform.position = startPos;
+                transform.rotation = startRot;
+                gameObject.layer = originalLayer;
+                _state = originalState;
+
+                if (savedHomeSet)
                 {
-                    Debug.LogError($"[CardView3D] 放置失败: {slot.name}");
-                    // 如果放置失败，恢复原始状态
-                    transform.SetParent(originalParent, true);
-                    gameObject.layer = originalLayer;
-                    _state = originalState;
+                    if (savedHomeParent != null)
+                    {
+                        Vector3 restoredPos = savedHomeParent.TransformPoint(savedHomeLocalPos);
+                        Quaternion restoredRot = savedHomeParent.rotation * savedHomeLocalRot;
+                        SetHomeFromZone(savedHomeParent, restoredPos, restoredRot);
+                    }
+                    else
+                    {
+                        SetHomePose(savedHomePos, savedHomeRot);
+                    }
                 }
+
+                handIndex = savedHandIndex;
+                slotIndex = savedSlotIndex;
+
+                if (originZone != null && originZone.TryReturnCardToHome(this)) yield break;
+                if (_homeSet)
+                {
+                    BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
+                    yield break;
+                }
+
+                yield return ReleaseDrop();
+                yield break;
             }
             finally
             {
-                // 恢复碰撞检测
-                if (body != null)
+                if (!placed && hasBody)
                 {
-                    body.isKinematic = true;
-                    body.detectCollisions = true;
-                    body.constraints = RigidbodyConstraints.FreezeAll;
+                    rb.detectCollisions = prevDetect;
+                    rb.useGravity = prevGravity;
+                    rb.isKinematic = prevKinematic;
+                    rb.constraints = prevConstraints;
                 }
+
+                IsReturningHome = false;
             }
         }
 
@@ -1160,42 +1283,122 @@ public class CardView3D : MonoBehaviour
     {
         Vector3 vPlanar = Vector3.ProjectOnPlane(velocity, Vector3.up);
         float vMag = vPlanar.magnitude;
-        
-        // 保持当前旋转，让倾斜效果基于当前旋转计算
-        
-        if (vMag > 1e-4f)
+
+        var camRef = _cam != null ? _cam : (Camera.main != null ? Camera.main : Camera.current);
+        if (camRef == null)
         {
-            // 计算移动方向在世界空间中的向量
-            Vector3 moveDir = vPlanar.normalized;
-            
-            // 计算倾斜轴：使用世界空间的右方向作为参考
-            Vector3 axis = Vector3.Cross(moveDir, Vector3.up).normalized;
-            
-            float boostK = 1f;
-            if (_startBoostT > 0f)
+            if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
+        }
+        Vector3 camForward = camRef != null ? camRef.transform.forward : Vector3.forward;
+        camForward.y = 0f;
+        if (camForward.sqrMagnitude < 1e-6f) camForward = Vector3.forward;
+        camForward.Normalize();
+        Vector3 camRight = camRef != null ? camRef.transform.right : Vector3.right;
+        camRight.y = 0f;
+        if (camRight.sqrMagnitude < 1e-6f)
+        {
+            camRight = new Vector3(camForward.z, 0f, -camForward.x);
+        }
+        camRight.Normalize();
+
+        float boostK = 1f;
+        if (_startBoostT > 0f)
+        {
+            boostK = Mathf.Lerp(1f, startBoostMul, _startBoostT / Mathf.Max(0.0001f, startBoostTime));
+            _startBoostT = Mathf.Max(0f, _startBoostT - Time.deltaTime);
+        }
+
+        float alphaBlend = 1f - Mathf.Exp(-followLeanResponsiveness * Time.deltaTime);
+        _pointerWorldSpeed = Mathf.MoveTowards(_pointerWorldSpeed, 0f, pointerLeanRelax * Time.deltaTime);
+        float maxPitch = Mathf.Max(0f, leanMaxPitchDeg);
+        float maxYaw = Mathf.Max(0f, leanMaxYawDeg);
+        float maxRoll = Mathf.Max(0f, leanMaxRollDeg);
+
+        float pitch = 0f, yaw = 0f, roll = 0f;
+
+        if (_hasPointerAnchor && box != null)
+        {
+            Vector3 pointerLocal = transform.InverseTransformPoint(_lastPointerWS);
+            Vector3 centerLocal = box.center;
+            Vector2 planarRaw = new Vector2(pointerLocal.x - centerLocal.x, pointerLocal.z - centerLocal.z);
+            float filter = Mathf.Clamp01(pointerLeanFilter * Time.deltaTime);
+            Vector2 planarPrev = _pointerLocalPlanar;
+            Vector2 planarFiltered = Vector2.Lerp(planarPrev, planarRaw, filter);
+            if (!_hasPointerAnchor) planarFiltered = planarRaw;
+            Vector2 moveVec = planarFiltered - planarPrev;
+            _pointerLocalPlanarPrev = planarPrev;
+            _pointerLocalPlanar = planarFiltered;
+
+            Vector3 size = box.size;
+            float halfW = Mathf.Max(0.0001f, size.x * 0.5f);
+            float halfH = Mathf.Max(0.0001f, size.y * 0.5f);
+            float normX = Mathf.Clamp(planarFiltered.x / halfW, -1f, 1f);
+            float normY = Mathf.Clamp(planarFiltered.y / halfH, -1f, 1f);
+            _pointerLocalNorm = new Vector2(normX, normY);
+
+            float pointerMag = Mathf.Clamp(planarFiltered.magnitude / Mathf.Max(halfW, halfH), 0f, 1f);
+            Vector2 pointerDir = planarFiltered.sqrMagnitude > 1e-6f ? planarFiltered.normalized : Vector2.zero;
+            Vector2 moveDir = moveVec.sqrMagnitude > 1e-6f ? moveVec.normalized : Vector2.zero;
+
+            float speedFactor = Mathf.Clamp01(_pointerWorldSpeed * pointerLeanSpeedGain);
+            float pointerWeight = Mathf.SmoothStep(0f, 1f, pointerMag);
+            float blend = Mathf.Clamp01(pointerWeight * 0.6f + speedFactor * 0.4f);
+
+            float basePitch = Mathf.Clamp(-pointerDir.y * pointerWeight * leanPitchGain, -maxPitch, maxPitch);
+            float baseRoll = Mathf.Clamp(pointerDir.x * pointerWeight * leanRollGain, -maxRoll, maxRoll);
+
+            float diagAdjust = pointerDir.x * pointerDir.y * pointerWeight * leanRollGain * 0.5f;
+            baseRoll += diagAdjust;
+
+            float movePitch = Mathf.Clamp(-moveDir.y * speedFactor * leanPitchGain * 0.6f, -maxPitch, maxPitch);
+            float moveRoll = Mathf.Clamp(moveDir.x * speedFactor * leanRollGain * 0.6f, -maxRoll, maxRoll);
+
+            float desiredPitch = Mathf.Clamp(basePitch + movePitch, -maxPitch, maxPitch);
+            float desiredRoll = Mathf.Clamp(baseRoll + moveRoll, -maxRoll, maxRoll);
+
+            float yawPointer = pointerDir.x * pointerWeight * leanYawGain * 0.5f;
+            float yawMove = 0f;
+            if (pointerDir.sqrMagnitude > 1e-6f && moveDir.sqrMagnitude > 1e-6f)
             {
-                boostK = Mathf.Lerp(1f, startBoostMul, _startBoostT / Mathf.Max(0.0001f, startBoostTime));
-                _startBoostT = Mathf.Max(0f, _startBoostT - Time.deltaTime);
+                float angleDeg = Mathf.Clamp(Vector2.SignedAngle(pointerDir, moveDir), -135f, 135f);
+                yawMove = (angleDeg / 90f) * leanYawGain * speedFactor;
             }
+            float desiredYaw = Mathf.Clamp(yawPointer + yawMove, -maxYaw, maxYaw);
 
-            // 计算倾斜角度（保持较小的角度以避免翻转）
-            float ang = Mathf.Clamp(vMag * followLeanSpeedScale * boostK, 0f, followLeanMaxDeg * 0.5f);
-            
-            // 先应用基准旋转，再应用倾斜
-            Quaternion followRot = _baseRot * Quaternion.AngleAxis(ang, axis);
+            _pointerAngle = Mathf.Lerp(_pointerAngle, desiredYaw, filter);
+            pitch = Mathf.Lerp(0f, desiredPitch, blend);
+            roll = Mathf.Lerp(0f, desiredRoll, blend);
+            yaw = _pointerAngle;
+        }
+        else if (vMag > 1e-4f)
+        {
+            float velForward = Vector3.Dot(vPlanar, camForward);
+            float velRight = Vector3.Dot(vPlanar, camRight);
+            pitch = Mathf.Clamp(-velForward * leanPitchGain * boostK, -maxPitch, maxPitch);
+            roll = Mathf.Clamp(velRight * leanRollGain * boostK, -maxRoll, maxRoll);
+            yaw = Mathf.Clamp(velRight * leanYawGain * boostK, -maxYaw, maxYaw);
+        }
+        else
+        {
+            _hasPointerAnchor = false;
+            _pointerLocalNorm = Vector2.zero;
+            _pointerLocalPlanar = Vector2.zero;
+            _pointerLocalPlanarPrev = Vector2.zero;
+            _pointerAngle = 0f;
+        }
 
-            // 添加调试日志
-            if (debugHoverLogs)
-            {
-                Debug.Log($"[CardView3D] 倾斜角度: {ang}, 速度: {vMag}, 轴: {axis}, 旋转: {followRot.eulerAngles}");
-            }
+        float velForward2 = Vector3.Dot(vPlanar, camForward);
+        float velRight2 = Vector3.Dot(vPlanar, camRight);
+        float yawVelocity = Mathf.Clamp(velRight2 * leanYawGain * boostK * 0.5f, -maxYaw, maxYaw);
+        yaw = Mathf.Clamp(yaw + yawVelocity, -maxYaw, maxYaw);
 
-            // 确保旋转不会导致卡牌翻转
-            followRot = SoftLimitToBaseRotation(followRot);
-            
-            // 指数平滑过渡
-            float alpha = 1f - Mathf.Exp(-followLeanResponsiveness * Time.deltaTime);
-            transform.rotation = Quaternion.Slerp(transform.rotation, followRot, alpha);
+        Quaternion followRot = _baseRot * Quaternion.Euler(pitch, yaw, roll);
+        followRot = SoftLimitToBaseRotation(followRot);
+        transform.rotation = Quaternion.Slerp(transform.rotation, followRot, alphaBlend);
+
+        if (debugHoverLogs)
+        {
+            Debug.Log($"[CardView3D] 倾斜 pitch={pitch:F2}, yaw={yaw:F2}, roll={roll:F2}, vMag={vMag:F2}");
         }
 
         // 仅脚本驱动旋转；避免写入刚体的速度
@@ -1215,19 +1418,49 @@ public class CardView3D : MonoBehaviour
 
     private void GateWobbleBySpeed(Vector3 velocity)
     {
+        if (_state != DragState.Dragging)
+        {
+            if (_wobbleCo != null) { StopCoroutine(_wobbleCo); _wobbleCo = null; }
+            if (_fadeCo != null) { StopCoroutine(_fadeCo); _fadeCo = null; }
+            _tiltWeight = 0f;
+            _wobbleIdleTimer = 0f;
+            _wobbleCooldownTimer = 0f;
+            return;
+        }
+
         float v = Vector3.ProjectOnPlane(velocity, Vector3.up).magnitude;
         float high = Mathf.Max(0f, speedThreshold);
         float low = Mathf.Max(0f, speedThreshold - Mathf.Max(0f, speedHysteresis));
-        if (v > high)
+        float pointerSpeed = _pointerWorldSpeed;
+        bool pointerStill = pointerSpeed <= 0.05f;
+
+        if (v > high || !pointerStill)
         {
             if (_fadeCo != null) StopCoroutine(_fadeCo);
             _fadeCo = StartCoroutine(FadeTilt(0f, wobbleEaseOut));
+            if (_wobbleCo != null) { StopCoroutine(_wobbleCo); _wobbleCo = null; }
+            _wobbleIdleTimer = 0f;
+            _wobbleCooldownTimer = wobbleCooldown;
         }
-        else if (v < low)
+        else if (v < low && pointerStill)
         {
-            if (_wobbleCo == null) _wobbleCo = StartCoroutine(WobbleLoop());
-            if (_fadeCo != null) StopCoroutine(_fadeCo);
-            _fadeCo = StartCoroutine(FadeTilt(1f, wobbleEaseIn));
+            if (_wobbleCooldownTimer > 0f)
+            {
+                _wobbleCooldownTimer = Mathf.Max(0f, _wobbleCooldownTimer - Time.deltaTime);
+                return;
+            }
+
+            _wobbleIdleTimer += Time.deltaTime;
+            if (_wobbleIdleTimer >= wobbleStartDelay)
+            {
+                if (_wobbleCo == null) _wobbleCo = StartCoroutine(WobbleLoop());
+                if (_fadeCo != null) StopCoroutine(_fadeCo);
+                _fadeCo = StartCoroutine(FadeTilt(1f, wobbleEaseIn));
+            }
+        }
+        else
+        {
+            _wobbleIdleTimer = 0f;
         }
     }
 
@@ -1337,10 +1570,21 @@ public class CardView3D : MonoBehaviour
         euler.y = Normalize180(euler.y);
         euler.z = Normalize180(euler.z);
         float m = Mathf.Abs(maxAxisDeviationDeg);
-        euler.x = SoftClamp(euler.x, m);
-        euler.y = SoftClamp(euler.y, m);
-        euler.z = SoftClamp(euler.z, m);
+        float xLimit = leanMaxPitchDeg > 0.0001f ? leanMaxPitchDeg : m;
+        float yLimit = leanMaxYawDeg > 0.0001f ? leanMaxYawDeg : m;
+        float zLimit = leanMaxRollDeg > 0.0001f ? leanMaxRollDeg : m;
+
+        euler.x = ApplySoftClamp(euler.x, xLimit, m);
+        euler.y = ApplySoftClamp(euler.y, yLimit, m);
+        euler.z = ApplySoftClamp(euler.z, zLimit, m);
         return _baseRot * Quaternion.Euler(euler);
+    }
+
+    private float ApplySoftClamp(float angle, float preferredLimit, float fallbackLimit)
+    {
+        float limit = preferredLimit > 0.0001f ? preferredLimit : fallbackLimit;
+        if (limit <= 0.0001f) return 0f;
+        return SoftClamp(angle, limit);
     }
 
     private static float Normalize180(float angle)
@@ -1387,6 +1631,14 @@ public class CardView3D : MonoBehaviour
         _dragVel = Vector3.zero;
         _smoothVel = Vector3.zero;
         _lastTarget = transform.position;
+        _hasPointerAnchor = false;
+        _pointerWorldSpeed = 0f;
+        _pointerLocalNorm = Vector2.zero;
+        _pointerLocalPlanar = Vector2.zero;
+        _pointerLocalPlanarPrev = Vector2.zero;
+        _pointerAngle = 0f;
+        _wobbleIdleTimer = 0f;
+        _wobbleCooldownTimer = 0f;
         // 旋转回归到基准软限制
         transform.rotation = SoftLimitToBaseRotation(_baseRot);
         // 刚体/碰撞体安全状态

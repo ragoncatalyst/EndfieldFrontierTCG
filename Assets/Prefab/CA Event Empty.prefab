@@ -267,49 +267,103 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 66f4b2b02701840f5aa2f5f56efc91c0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  body: {fileID: 0}
+  box: {fileID: 0}
   MainRenderer: {fileID: 3534289846402407112}
+  NameText: {fileID: 7307378029974938486}
   HPText: {fileID: 0}
   ATKText: {fileID: 0}
-  NameText: {fileID: 7307378029974938486}
-  BoxCollider: {fileID: 7899947318976538566}
-  Rigidbody: {fileID: 8579624915616836049}
-  HPIconRenderer: {fileID: 0}
-  ATKIconRenderer: {fileID: 0}
-  DragPlaneY: 0.5
-  ReturnDuration: 0.25
-  TiltAmplitudeDeg: 10
-  TiltPeriodSec: 1.2
-  AlignUprightDuration: 0.35
-  TableUprightYaw: 0
-  DragUpright: 0
-  CA_ID: 1
-  CA_HP: 0
-  CA_ATK: 0
-  CA_POS_INI: {x: 0, y: 0, z: 0}
-  CA_EffectInfo_DIS_Cached: 
   MainTextureCache: {fileID: 0}
-  MoveSmoothTime: 0.1
-  PickupLerpDuration: 0.18
-  RotSmoothTime: 0.12
-  PickupLiftHeight: 0.06
-  PixelsToUnits: 0.001
-  VisualScale: 1
-  CardThickness: 0.01
-  AutoSizeToTarget: 1
-  TargetCardHeight: 0.4
-  TargetScaleMultiplier: 1
-  OverridePixelSize: 0
-  OverrideWidthPx: 625
-  OverrideHeightPx: 1000
-  GroundY: 0
-  DropDuration: 0.45
-  DropArcBase: 0.1
-  InertiaDistanceScale: 0.25
-  InertiaMinDistance: 0.03
-  InertiaMaxDistance: 0.4
-  InertiaArcScale: 0.5
-  DragVelocitySmoothTime: 0.08
-  PickupRotSmoothTime: 0.18
+  debugHoverLogs: 1
+  cardViewRevision: cv_rev_2025-09-03_01
+  interactLayerMask:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  handIndex: -1
+  slotIndex: -1
+  createId: -1
+  cardId: -1
+  dragPlaneY: 0.35
+  groundY: 0
+  followSmooth: 0.06
+  followLeanMaxDeg: 18
+  followLeanResponsiveness: 16
+  followLeanSpeedScale: 0.06
+  maxAxisDeviationDeg: 10
+  startBoostTime: 0.15
+  startBoostMul: 1.6
+  followLiftScale: 0.02
+  followLiftMax: 0.12
+  leanMaxPitchDeg: 40
+  leanMaxYawDeg: 20
+  leanMaxRollDeg: 40
+  leanPitchGain: 90
+  leanYawGain: 30
+  leanRollGain: 90
+  pointerLeanSpeedGain: 6
+  pointerLeanRelax: 6
+  pointerLeanFilter: 16
+  wobbleStartDelay: 0.25
+  wobbleCooldown: 0.25
+  wobbleAmpDeg: 3
+  wobblePeriod: 1.4
+  wobbleEaseIn: 0.15
+  wobbleEaseOut: 0.12
+  speedThreshold: 1
+  speedHysteresis: 0.3
+  dropCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 2
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 0.7
+      value: 0.9
+      inSlope: 0.8
+      outSlope: 0.5
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    - serializedVersion: 3
+      time: 1
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0
+      outWeight: 0
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  dropDuration: 0.25
+  _returnPhase1Duration: 0.2
+  _returnPhase2Duration: 0.25
+  _returnFrontBias: 0.15
+  _returnSortingBoost: 20
+  clickMaxDuration: 0.15
+  clickMaxDistance: 0.05
+  dragFrontBias: 0.03
+  dragSortingBoost: 40
+  elevateWhenBlocked: 1
+  elevateMax: 0.12
+  elevateUpSpeed: 2
+  elevateDownSpeed: 2.5
+  collisionSmoothTime: 0.06
+  followDragSmooth: 0.04
+  hoverColliderExtendZ: 0.06
+  addShadowCasterHelper: 1
+  shadowCasterZOffset: -0.001
+  shadowCasterScaleMul: 1.02
+  suppressOnMouseHandlers: 1
 --- !u!1 &6242646038690029147
 GameObject:
   m_ObjectHideFlags: 0
@@ -371,7 +425,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0

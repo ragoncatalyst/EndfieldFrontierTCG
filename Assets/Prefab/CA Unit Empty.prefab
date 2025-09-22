@@ -232,7 +232,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -315,7 +315,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -631,7 +631,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -944,16 +944,27 @@ MonoBehaviour:
   cardId: -1
   dragPlaneY: 0.75
   groundY: 0
-  followSmooth: 0.06
+  followSmooth: 0.07
   followLeanMaxDeg: 18
-  followLeanResponsiveness: 16
-  followLeanSpeedScale: 0.06
+  followLeanResponsiveness: 20
+  followLeanSpeedScale: 0.1
   maxAxisDeviationDeg: 10
   startBoostTime: 0.15
   startBoostMul: 1.6
   followLiftScale: 0.02
   followLiftMax: 0.12
-  wobbleAmpDeg: 3
+  leanMaxPitchDeg: 10
+  leanMaxYawDeg: 8
+  leanMaxRollDeg: 10
+  leanPitchGain: 90
+  leanYawGain: 30
+  leanRollGain: 90
+  pointerLeanSpeedGain: 6
+  pointerLeanRelax: 6
+  pointerLeanFilter: 16
+  wobbleStartDelay: 0.25
+  wobbleCooldown: 0.25
+  wobbleAmpDeg: 15
   wobblePeriod: 1.4
   wobbleEaseIn: 0.15
   wobbleEaseOut: 0.12
@@ -993,131 +1004,11 @@ MonoBehaviour:
     m_PostInfinity: 2
     m_RotationOrder: 4
   dropDuration: 0.25
-  returnPhase1SpeedCurve:
-    serializedVersion: 2
-    m_Curve:
-    - serializedVersion: 3
-      time: 0
-      value: 0
-      inSlope: 0
-      outSlope: 0
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0
-      outWeight: 0
-    - serializedVersion: 3
-      time: 0.30674434
-      value: 0.042738378
-      inSlope: 0.49781004
-      outSlope: 0.49781004
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.922071
-    - serializedVersion: 3
-      time: 0.4392193
-      value: 0.17541957
-      inSlope: 1.4875206
-      outSlope: 1.4875206
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.33333334
-    - serializedVersion: 3
-      time: 0.5597248
-      value: 0.84505224
-      inSlope: 1.4957774
-      outSlope: 1.4957774
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.19699636
-    - serializedVersion: 3
-      time: 0.64683187
-      value: 0.93758374
-      inSlope: 0.653889
-      outSlope: 0.653889
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.49836895
-    - serializedVersion: 3
-      time: 1
-      value: 1
-      inSlope: 0
-      outSlope: 0
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0
-      outWeight: 0
-    m_PreInfinity: 2
-    m_PostInfinity: 2
-    m_RotationOrder: 4
-  returnPhase2SpeedCurve:
-    serializedVersion: 2
-    m_Curve:
-    - serializedVersion: 3
-      time: 0
-      value: 0
-      inSlope: 0
-      outSlope: 0
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0
-      outWeight: 0
-    - serializedVersion: 3
-      time: 0.30674434
-      value: 0.042738378
-      inSlope: 0.49781004
-      outSlope: 0.49781004
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.922071
-    - serializedVersion: 3
-      time: 0.4392193
-      value: 0.17541957
-      inSlope: 1.4875206
-      outSlope: 1.4875206
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.33333334
-    - serializedVersion: 3
-      time: 0.5597248
-      value: 0.84505224
-      inSlope: 1.4957774
-      outSlope: 1.4957774
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.19699636
-    - serializedVersion: 3
-      time: 0.64683187
-      value: 0.93758374
-      inSlope: 0.653889
-      outSlope: 0.653889
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0.33333334
-      outWeight: 0.49836895
-    - serializedVersion: 3
-      time: 1
-      value: 1
-      inSlope: 0
-      outSlope: 0
-      tangentMode: 0
-      weightedMode: 0
-      inWeight: 0
-      outWeight: 0
-    m_PreInfinity: 2
-    m_PostInfinity: 2
-    m_RotationOrder: 4
-  _returnPhase1Duration: 0.2
+  _returnPhase1Duration: 0.3
   _returnPhase2Duration: 0.25
   _returnFrontBias: 0.15
   _returnSortingBoost: 20
-  clickMaxDuration: 0.15
+  clickMaxDuration: 0.2
   clickMaxDistance: 0.05
   dragFrontBias: 0.03
   dragSortingBoost: 40
@@ -1126,7 +1017,7 @@ MonoBehaviour:
   elevateUpSpeed: 2
   elevateDownSpeed: 2.5
   collisionSmoothTime: 0.06
-  followDragSmooth: 0.04
+  followDragSmooth: 0.06
   hoverColliderExtendZ: 0.06
   addShadowCasterHelper: 1
   shadowCasterZOffset: -0.001

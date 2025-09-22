@@ -103,18 +103,8 @@ namespace EndfieldFrontierTCG.Hand
         public float returnAheadZ = 0.2f;
         [Tooltip("第一阶段持续时间（秒）")]
         public float returnPhase1 = 0.15f;
-		[Tooltip("第二阶段持续时间（秒）")]
-		public float returnPhase2 = 0.18f;
-
-		[Header("Hover Hand Offset")]
-		[Tooltip("当 hover 任意手牌时，整条手牌沿本地 Z+ 推进的距离（米）")]
-		public float hoverHandForward = 0.08f;
-		[Tooltip("手牌推进/回退的平滑时间（秒）")]
-		[Range(0.01f, 1f)] public float hoverHandLerp = 0.15f;
-		[Tooltip("手牌向前浮起时的速度曲线（0→1）")]
-		public AnimationCurve hoverHandEnterCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
-		[Tooltip("手牌回落时的速度曲线（0→1）")]
-		public AnimationCurve hoverHandExitCurve = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+        [Tooltip("第二阶段持续时间（秒）")]
+        public float returnPhase2 = 0.18f;
 
 		[Header("Debug")] public bool debugLogs = false;
 		[Header("Build")]
@@ -125,9 +115,6 @@ namespace EndfieldFrontierTCG.Hand
 		private int _hoverIndex = -1;
 		private bool _hoverFromBelow = false;
 		private Coroutine _hoverCo;
-		private float _hoverHandBlend = 0f;
-		private float _hoverHandTimer = 0f;
-		private Vector3 _currentHandOffset = Vector3.zero;
 		private int _paramsHash = 0;
 		private readonly Dictionary<int, float> _enterMinYByIndex = new Dictionary<int, float>();
 		private bool _pseudoHover = false;
@@ -141,11 +128,11 @@ namespace EndfieldFrontierTCG.Hand
 		private bool _compactOnDrag = false;
 		private CardView3D _draggingCard = null;
 		private int _draggingSlot = -1;
-		private readonly Dictionary<CardView3D, int> _initialSlotDuringDrag = new Dictionary<CardView3D, int>();
 		// Compact mapping: other cards -> reassigned contiguous slots around center (visual only)
 		private readonly System.Collections.Generic.Dictionary<CardView3D, int> _origSlotIndex = new System.Collections.Generic.Dictionary<CardView3D, int>();
 		private readonly System.Collections.Generic.Dictionary<CardView3D, int> _compactAssignedSlot = new System.Collections.Generic.Dictionary<CardView3D, int>();
 
+        private Coroutine _returnCo = null;
 
 		private void BuildCompactMapping()
 		{
@@ -181,20 +168,6 @@ namespace EndfieldFrontierTCG.Hand
 			var childCards = GetComponentsInChildren<CardView3D>(true);
 			if (childCards != null && childCards.Length > 0) RegisterCards(childCards);
 			if (_hoverCo == null) _hoverCo = StartCoroutine(RepositionByHover());
-			_currentHandOffset = Vector3.zero;
-			_hoverHandBlend = 0f;
-		}
-
-		private void OnDisable()
-		{
-			if (_hoverCo != null)
-			{
-				StopCoroutine(_hoverCo);
-				_hoverCo = null;
-			}
-			_hoverHandBlend = 0f;
-			_hoverHandTimer = 0f;
-			_currentHandOffset = Vector3.zero;
 		}
 
 		private void OnValidate()
@@ -216,18 +189,6 @@ namespace EndfieldFrontierTCG.Hand
 					transform.position = new Vector3(cam.transform.position.x, yPlane, p.z);
 				}
 			}
-
-			// 根据是否有 hover 卡牌，计算沿自身 forward 的偏移但只保存，不直接移动 transform
-			float hoverTarget = (_hoverIndex >= 0) ? 1f : 0f;
-			float hoverLerpDur = Mathf.Max(0.01f, hoverHandLerp);
-			if (_hoverHandBlend != hoverTarget)
-			{
-				_hoverHandTimer = Mathf.MoveTowards(_hoverHandTimer, hoverTarget, Time.deltaTime / hoverLerpDur);
-				var curve = hoverTarget > _hoverHandBlend ? hoverHandEnterCurve : hoverHandExitCurve;
-				float eval = curve != null ? curve.Evaluate(_hoverHandTimer) : _hoverHandTimer;
-				_hoverHandBlend = Mathf.Clamp01(eval);
-			}
-			_currentHandOffset = Vector3.forward * (hoverHandForward * _hoverHandBlend);
 
 			int h = 17;
 			h = h * 31 + hoverX.GetHashCode();
@@ -405,12 +366,10 @@ namespace EndfieldFrontierTCG.Hand
 						_activePressed.ExternalBeginDrag();
 						_activePressed.ExternalDrag();
 						// 开启并拢：记录被拖拽的卡与其原槽位，其他牌向中心收拢但保留各自原始 slotIndex
-					_draggingCard = _activePressed;
-					_draggingSlot = (_draggingCard != null) ? _draggingCard.slotIndex : -1;
-					_compactOnDrag = (_draggingSlot >= 0);
-					CaptureInitialHandLayout();
-					RestoreHandLayoutSnapshot(false, false);
-					if (_compactOnDrag) BuildCompactMapping();
+						_draggingCard = _activePressed;
+						_draggingSlot = (_draggingCard != null) ? _draggingCard.slotIndex : -1;
+						_compactOnDrag = (_draggingSlot >= 0);
+						if (_compactOnDrag) BuildCompactMapping();
 					}
 					else if (_activeDragging)
 					{
@@ -423,22 +382,9 @@ namespace EndfieldFrontierTCG.Hand
 			if (Input.GetMouseButtonUp(0) || !Input.GetMouseButton(0))
 			{
 				if (_activeDragging && _activePressed != null) _activePressed.ExternalEndDrag();
-				bool stillInHand = _draggingCard != null && _draggingCard.transform != null && _draggingCard.transform.IsChildOf(transform);
-				if (_draggingCard != null)
-				{
-					if (stillInHand)
-					{
-						RestoreHandLayoutSnapshot(true, true);
-					}
-					else
-					{
-						_initialSlotDuringDrag.Clear();
-					}
-				}
 				_activePressed = null; _pressing = false; _activeDragging = false;
 				// 停止并拢，给归位的卡保留原位
 				_compactOnDrag = false; _draggingCard = null; _draggingSlot = -1;
-				_initialSlotDuringDrag.Clear();
 				// 松开后允许悬停动画重新工作
 				UpdateHoverByRay();
 			}
@@ -452,7 +398,6 @@ namespace EndfieldFrontierTCG.Hand
 			_activeDragging = false;
 			_compactOnDrag = false; _draggingCard = null; _draggingSlot = -1;
 			_compactAssignedSlot.Clear(); _origSlotIndex.Clear();
-			_initialSlotDuringDrag.Clear();
 		}
 
 		private void UpdateHoverByRay()
@@ -530,7 +475,7 @@ namespace EndfieldFrontierTCG.Hand
             ForceRelayoutExistingCards();
         }
 
-		public void UnregisterCard(CardView3D card)
+        public void UnregisterCard(CardView3D card)
         {
             if (card == null) return;
             
@@ -570,7 +515,7 @@ namespace EndfieldFrontierTCG.Hand
                 _pressing = false;
                 _activeDragging = false;
             }
-
+            
             // 如果这张卡是当前拖拽的卡，清除拖拽状态
             if (_draggingCard == card)
             {
@@ -578,8 +523,6 @@ namespace EndfieldFrontierTCG.Hand
                 _draggingSlot = -1;
                 _compactOnDrag = false;
             }
-
-			_initialSlotDuringDrag.Remove(card);
             
             // 从压缩映射中移除
             _origSlotIndex.Remove(card);
@@ -600,127 +543,21 @@ namespace EndfieldFrontierTCG.Hand
             ForceRelayoutExistingCards();
         }
 
-        public void ForceRelayoutExistingCards()
-        {
-            var childCards = GetComponentsInChildren<CardView3D>(true);
-            if (childCards == null || childCards.Length == 0)
-            {
-                _cards = new CardView3D[0];
-                return;
-            }
-
-            var list = new List<CardView3D>(childCards.Length);
-            for (int i = 0; i < childCards.Length; i++)
-            {
-                if (childCards[i] != null) list.Add(childCards[i]);
-            }
-            if (list.Count == 0) { _cards = new CardView3D[0]; return; }
-
-            list.Sort((a, b) =>
-            {
-                int sa = a.slotIndex >= 0 ? a.slotIndex : int.MaxValue;
-                int sb = b.slotIndex >= 0 ? b.slotIndex : int.MaxValue;
-                if (sa == sb)
-                {
-                    Vector3 pa = transform.InverseTransformPoint(a.transform.position);
-                    Vector3 pb = transform.InverseTransformPoint(b.transform.position);
-                    return pa.x.CompareTo(pb.x);
-                }
-                return sa.CompareTo(sb);
-            });
-
-            int maxSlot = Mathf.Max(0, slots - 1);
-            for (int i = 0; i < list.Count; i++)
-            {
-                int slot = Mathf.Clamp(i, 0, maxSlot);
-                bool animate = Application.isPlaying && list[i] == _draggingCard;
-                MoveCardToSlotAnimated(list[i], slot, animate);
-                list[i].handIndex = i;
-            }
-
-            _cards = list.ToArray();
-        }
-
-		private void CaptureInitialHandLayout()
+		public void ForceRelayoutExistingCards()
 		{
-			_initialSlotDuringDrag.Clear();
-			if (_cards == null) return;
-			for (int i = 0; i < _cards.Length; i++)
+			var list = GetComponentsInChildren<CardView3D>(true);
+			for (int i = 0; i < list.Length; i++)
 			{
-				var c = _cards[i]; if (c == null) continue;
-				_initialSlotDuringDrag[c] = c.slotIndex;
-			}
-		}
-
-        private void RestoreHandLayoutSnapshot(bool includeDraggedCard, bool updateCardsArray)
-        {
-            if (_initialSlotDuringDrag.Count == 0)
-            {
-                if (updateCardsArray) ForceRelayoutExistingCards();
-                return;
-            }
-
-            var pairs = new List<(CardView3D card, int slot)>();
-            foreach (var kv in _initialSlotDuringDrag)
-            {
-                if (kv.Key == null) continue;
-                pairs.Add((kv.Key, kv.Value));
-            }
-            pairs.Sort((a, b) => a.slot.CompareTo(b.slot));
-
-            int maxSlot = Mathf.Max(0, slots - 1);
-
-            if (!includeDraggedCard)
-            {
-                int cursor = 0;
-                foreach (var item in pairs)
-                {
-                    if (item.card == _draggingCard) continue;
-                    int slot = Mathf.Clamp(cursor++, 0, maxSlot);
-                    MoveCardToSlotAnimated(item.card, slot, false);
-                    item.card.handIndex = slot;
-                }
-            }
-            else
-            {
-                foreach (var item in pairs)
-                {
-                    int slot = Mathf.Clamp(item.slot, 0, maxSlot);
-                    bool animate = Application.isPlaying && item.card == _draggingCard;
-                    MoveCardToSlotAnimated(item.card, slot, animate);
-                }
-            }
-
-            if (updateCardsArray)
-            {
-                var ordered = new List<CardView3D>();
-                foreach (var item in pairs)
-                {
-                    if (item.card == null) continue;
-                    if (!includeDraggedCard && item.card == _draggingCard) continue;
-                    ordered.Add(item.card);
-                }
-                ordered.Sort((a, b) => a.slotIndex.CompareTo(b.slotIndex));
-                for (int i = 0; i < ordered.Count; i++) ordered[i].handIndex = i;
-                _cards = ordered.ToArray();
-            }
-        }
-
-		private void MoveCardToSlotAnimated(CardView3D card, int slot, bool animate)
-		{
-			if (card == null) return;
-			slot = Mathf.Clamp(slot, 0, Mathf.Max(0, slots - 1));
-			if (!TryGetSlotPose(slot, out var pos, out var rot)) return;
-
-			card.SetHomeFromZone(transform, pos, rot);
-			card.slotIndex = slot;
-			if (animate && Application.isPlaying && !card.IsDragging)
-			{
-				card.BeginSmoothReturnToHome(returnAheadZ, returnPhase1, returnPhase2);
-			}
-			else
-			{
-				card.SnapTo(pos, rot);
+				int bestIdx = 0; float best = float.MaxValue;
+				for (int s = 0; s < slots; s++)
+				{
+					if (TryGetSlotPose(s, out var p, out _))
+					{
+						float d = Vector3.SqrMagnitude(list[i].transform.position - p);
+						if (d < best) { best = d; bestIdx = s; }
+					}
+				}
+				AssignCardToSlot(list[i], bestIdx);
 			}
 		}
 
@@ -898,7 +735,6 @@ namespace EndfieldFrontierTCG.Hand
 			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
 			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
 			pos = pWorld + Vector3.up * (offsetUp + shadowLiftY) + fwdXZ * offsetForward;
-			pos += transform.TransformDirection(_currentHandOffset);
 			if (stackDepthByIndex && Camera.main != null && slots > 0)
 			{
 				int order = reverseDepthOrder ? (slots - 1 - index) : index;
@@ -926,7 +762,6 @@ namespace EndfieldFrontierTCG.Hand
 			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
 			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
 			pos = pWorld + Vector3.up * offsetUp + fwdXZ * offsetForward;
-			pos += transform.TransformDirection(_currentHandOffset);
 			if (stackDepthByIndex && Camera.main != null)
 			{
 				int order = reverseDepthOrder ? (int)(-units) : (int)(units);
@@ -958,31 +793,26 @@ namespace EndfieldFrontierTCG.Hand
 			return true;
 		}
 
-		public bool TryReturnCardToHome(CardView3D card)
+        public bool TryReturnCardToHome(CardView3D card)
         {
             if (card == null) return false;
-
-            // 若已放入棋盘槽位，直接忽略
-            if (card.transform.parent?.GetComponent<CardSlotBehaviour>() != null)
+            
+            // 检查卡牌是否已经被放置到槽位中
+            var cardSlot = card.transform.parent?.GetComponent<CardSlotBehaviour>();
+            if (cardSlot != null)
             {
+                // 如果卡牌已经在槽位中，不要让它返回手牌
                 Debug.Log($"[HandSplineZone] 卡牌已在槽位中，不返回手牌: {card.name}");
                 return false;
             }
 
-            if (card.IsDragging) return false;
-
-            // 计算目标槽位（优先使用当前 slotIndex，否则自动寻找最近槽位）
-            int targetSlot = card.slotIndex;
-            Vector3 targetPos; Quaternion targetRot;
-            if (targetSlot < 0 || !TryGetSlotPose(targetSlot, out targetPos, out targetRot))
+            if (!card.IsDragging)
             {
-                targetSlot = FindClosestSlotIndex(card.transform.position, out targetPos, out targetRot);
-                if (targetSlot < 0) targetSlot = 0;
+                // 改为由 HandSplineZone 启动协程，统一使用本组件的曲线与参数
+                if (_returnCo != null) StopCoroutine(_returnCo);
+                _returnCo = StartCoroutine(SmoothMoveCardToHome(card, returnAheadZ, returnPhase1, returnPhase2));
+                Debug.Log($"[HandSplineZone] 卡牌开始二段式返回 (由 HandSplineZone 驱动): {card.name}, 前向偏移: {returnAheadZ}米, 阶段1: {returnPhase1}秒, 阶段2: {returnPhase2}秒");
             }
-
-            card.SetHomeFromZone(transform, targetPos, targetRot);
-            card.slotIndex = targetSlot;
-            card.BeginSmoothReturnToHome(returnAheadZ, returnPhase1, returnPhase2);
             return true;
         }
 
@@ -1022,48 +852,158 @@ namespace EndfieldFrontierTCG.Hand
 			if (idx+1 < list.Count) right = list[idx+1];
 		}
 
-		private int FindClosestSlotIndex(Vector3 worldPos, out Vector3 slotPos, out Quaternion slotRot)
-		{
-			slotPos = transform.position; slotRot = transform.rotation;
-			int bestIndex = -1;
-			float bestSqr = float.MaxValue;
-			for (int i = 0; i < slots; i++)
-			{
-				if (!TryGetSlotPose(i, out var pos, out var rot)) continue;
-				float sqr = (pos - worldPos).sqrMagnitude;
-				if (sqr < bestSqr)
-				{
-					bestSqr = sqr;
-					bestIndex = i;
-					slotPos = pos;
-					slotRot = rot;
-				}
-			}
-			return bestIndex;
-		}
+		private IEnumerator SmoothMoveCardToHome(CardView3D card, float aheadZ, float phase1Dur, float phase2Dur)
+        {
+            if (card == null) yield break;
 
-		private void SyncHandIndicesBySlot()
-		{
-			if (_cards == null || _cards.Length == 0) return;
-			var list = new List<CardView3D>(_cards.Length);
-			for (int i = 0; i < _cards.Length; i++)
-			{
-				var c = _cards[i]; if (c == null) continue;
-				list.Add(c);
-			}
-			list.Sort((a, b) =>
-			{
-				int idxA = a.slotIndex >= 0 ? a.slotIndex : int.MaxValue;
-				int idxB = b.slotIndex >= 0 ? b.slotIndex : int.MaxValue;
-				int cmp = idxA.CompareTo(idxB);
-				if (cmp != 0) return cmp;
-				return a.handIndex.CompareTo(b.handIndex);
-			});
-			_cards = list.ToArray();
-			for (int i = 0; i < _cards.Length; i++)
-			{
-				_cards[i].handIndex = i;
-			}
-		}
+            // 标记返回状态，避免 HandSplineZone 的 hover/排布逻辑干扰
+            System.Reflection.PropertyInfo isReturningProp = null;
+            try
+            {
+                isReturningProp = card.GetType().GetProperty("IsReturningHome", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var setter = isReturningProp?.GetSetMethod(true);
+                setter?.Invoke(card, new object[] { true });
+            }
+            catch { }
+
+            Rigidbody rb = card.body;
+            BoxCollider bx = card.box != null ? card.box : card.GetComponentInChildren<BoxCollider>(true);
+            bool hasBody = rb != null;
+            bool prevDetect = false, prevGravity = false, prevKinematic = false, prevBoxEnabled = false;
+            RigidbodyConstraints prevConstraints = RigidbodyConstraints.FreezeAll;
+
+            if (hasBody)
+            {
+                prevDetect = rb.detectCollisions;
+                prevGravity = rb.useGravity;
+                prevKinematic = rb.isKinematic;
+                prevConstraints = rb.constraints;
+                rb.detectCollisions = false;
+                rb.useGravity = false;
+                rb.isKinematic = true;
+                rb.constraints = RigidbodyConstraints.FreezeAll;
+            }
+            if (bx != null)
+            {
+                prevBoxEnabled = bx.enabled;
+                bx.enabled = false;
+            }
+
+            try
+            {
+                Vector3 startPos = card.transform.position;
+                Quaternion startRot = card.transform.rotation;
+
+                // 目标姿态：优先使用 slotIndex 对应槽位，其次卡牌缓存的 HomePose
+                Vector3 targetPos = Vector3.zero; Quaternion targetRot = Quaternion.identity;
+                bool haveTargetPose = false;
+                if (card.slotIndex >= 0 && TryGetSlotPose(card.slotIndex, out targetPos, out targetRot))
+                {
+                    haveTargetPose = true;
+                }
+                else
+                {
+                    var tryGetHome = card.GetType().GetMethod("GetHomePose", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+                    if (tryGetHome != null)
+                    {
+                        var res = tryGetHome.Invoke(card, null) as System.ValueTuple<Vector3, Quaternion>?;
+                        if (res.HasValue)
+                        {
+                            targetPos = res.Value.Item1;
+                            targetRot = res.Value.Item2;
+                            haveTargetPose = true;
+                        }
+                    }
+                }
+
+                if (!haveTargetPose)
+                {
+                    if (!TryGetSlotPose((slots > 0) ? (slots - 1) / 2 : 0, out targetPos, out targetRot))
+                    {
+                        targetPos = transform.position;
+                        targetRot = transform.rotation;
+                    }
+                }
+
+                // 第一阶段的目标点：沿本地 Z+ 方向提前，加入轻微抬升避免穿插
+                Vector3 forwardDir = transform.forward;
+                if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
+                forwardDir.Normalize();
+                Vector3 aheadPos = targetPos + forwardDir * aheadZ;
+                float liftY = 0.04f;
+                aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
+
+                System.Func<AnimationCurve, float, float> evalCurve = (curve, t) =>
+                {
+                    if (curve == null) return t;
+                    return Mathf.Clamp01(curve.Evaluate(Mathf.Clamp01(t)));
+                };
+
+                // Phase 1：保持高度，朝前方过渡
+                if (phase1Dur > 1e-4f)
+                {
+                    float t = 0f;
+                    while (t < phase1Dur)
+                    {
+                        t += Time.deltaTime;
+                        float u = Mathf.Clamp01(t / phase1Dur);
+                        float w = evalCurve(returnPhase1Curve, u);
+                        Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
+                        Quaternion rot = Quaternion.Slerp(startRot, targetRot, w * 0.35f);
+                        card.transform.SetPositionAndRotation(pos, rot);
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    card.transform.position = aheadPos;
+                }
+
+                Vector3 phase2StartPos = card.transform.position;
+                Quaternion phase2StartRot = card.transform.rotation;
+
+                // Phase 2：从前方点回到槽位
+                if (phase2Dur > 1e-4f)
+                {
+                    float t2 = 0f;
+                    while (t2 < phase2Dur)
+                    {
+                        t2 += Time.deltaTime;
+                        float u = Mathf.Clamp01(t2 / phase2Dur);
+                        float w = evalCurve(returnPhase2Curve, u);
+                        Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, targetPos, w);
+                        Quaternion rot = Quaternion.Slerp(phase2StartRot, targetRot, w);
+                        card.transform.SetPositionAndRotation(pos, rot);
+                        yield return null;
+                    }
+                }
+
+                card.transform.SetPositionAndRotation(targetPos, targetRot);
+                card.SetHomeFromZone(transform, targetPos, targetRot);
+            }
+            finally
+            {
+                if (hasBody)
+                {
+                    rb.constraints = prevConstraints;
+                    rb.detectCollisions = prevDetect;
+                    rb.useGravity = prevGravity;
+                    rb.isKinematic = prevKinematic;
+                }
+                if (bx != null) bx.enabled = prevBoxEnabled;
+
+                try
+                {
+                    var setter2 = isReturningProp?.GetSetMethod(true);
+                    setter2?.Invoke(card, new object[] { false });
+                }
+                catch { }
+            }
+
+            var onRet = card.GetType().GetMethod("OnReturnedHome", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+            if (onRet != null) onRet.Invoke(card, null);
+
+            _returnCo = null;
+        }
 	}
 }
