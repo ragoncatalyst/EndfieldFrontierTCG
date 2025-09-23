@@ -75,8 +75,8 @@ namespace EndfieldFrontierTCG.Board
         {
             Debug.Log($"[CardSlotBehaviour] 开始尝试放置卡牌到槽位 {name}");
             Debug.Log($"[CardSlotBehaviour] 卡牌当前父物体: {(card.transform.parent != null ? card.transform.parent.name : "null")}");
-            
-            if (card == null || _currentCard != null) 
+
+            if (card == null || _currentCard != null || !card.IsUnitCard) 
             {
                 Debug.LogWarning($"[CardSlotBehaviour] 放置失败: card={card}, currentCard={_currentCard}");
                 return false;
@@ -145,6 +145,7 @@ namespace EndfieldFrontierTCG.Board
         public bool CanAcceptCard(CardView3D card)
         {
             if (card == null || IsOccupied) return false;
+            if (!card.IsUnitCard) return false;
             
             // 这里可以添加更多的检查逻辑，比如：
             // - 卡牌类型是否符合槽位要求

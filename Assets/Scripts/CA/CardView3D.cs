@@ -18,7 +18,12 @@ public class CardView3D : MonoBehaviour
     public TMP_Text HPText;
     public TMP_Text ATKText;
     public Texture2D MainTextureCache;
-    private const float DefaultPlacementHalfThickness = 0.01f;
+    public enum CardCategory { Unknown, Unit, Event }
+    public CardCategory Category { get; private set; } = CardCategory.Unknown;
+    public string CardType { get; private set; } = string.Empty;
+    public bool IsEventCard => Category == CardCategory.Event;
+    public bool IsUnitCard => Category == CardCategory.Unit;
+    public const float DefaultPlacementHalfThickness = 0.01f;
     [Header("Debug")]
     public bool debugHoverLogs = true;
     [SerializeField] private string cardViewRevision = "cv_rev_2025-09-03_01";
@@ -484,7 +489,7 @@ public class CardView3D : MonoBehaviour
         }
     }
 
-    private bool TryGetWorldBounds(out Bounds bounds)
+    public bool TryGetWorldBounds(out Bounds bounds)
     {
         if (box != null)
         {
@@ -759,6 +764,8 @@ public class CardView3D : MonoBehaviour
         if (data == null) return;
         // 记录卡牌唯一ID，便于排序
         cardId = data.CA_ID;
+        CardType = string.IsNullOrEmpty(data.CA_Type) ? string.Empty : data.CA_Type.Trim();
+        Category = ParseCategory(CardType);
         gameObject.layer = LayerMask.NameToLayer("Default");
         if (box != null) { box.enabled = true; box.isTrigger = false; }
         var mrAll = GetComponentsInChildren<Renderer>(true);
@@ -851,6 +858,13 @@ public class CardView3D : MonoBehaviour
         }
         // 为了拖拽与 OnMouse 事件，保持非触发器。如果需要物理禁用，用 FreezeAll 代替
         if (box != null) box.isTrigger = false;
+
+        if (IsEventCard)
+        {
+            transform.rotation = AlignToTableRotation(transform.rotation);
+        }
+        // 重新记录当前旋转作为拖拽基准
+        _baseRot = transform.rotation;
 
         // 推迟到真正进入拖拽平面后再计算鼠标-物体偏移，避免因手牌父级旋转/升降导致的初始错位
         _dragOffsetInitialized = false;
@@ -1079,9 +1093,49 @@ public class CardView3D : MonoBehaviour
             StartCoroutine(FadeTilt(0f, wobbleEaseOut));
             if (_wobbleCo != null) { StopCoroutine(_wobbleCo); _wobbleCo = null; }
 
-            // 使用射线检测所有可能的槽位
+            var currentHandZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+            var eventZoneCandidate = EventPlayZone.FindZoneForCard(this);
+
             var ray = Camera.main.ScreenPointToRay(Input.mousePosition);
             var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
+
+            if (IsEventCard)
+            {
+                EventPlayZone targetZone = eventZoneCandidate;
+                float nearestZoneDistance = float.MaxValue;
+                if (targetZone != null)
+                {
+                    nearestZoneDistance = Vector3.Distance(transform.position, targetZone.transform.position);
+                }
+
+                foreach (var hit in hits)
+                {
+                    var zone = hit.collider.GetComponent<EventPlayZone>();
+                    if (zone == null) zone = hit.collider.GetComponentInParent<EventPlayZone>();
+                    if (zone == null) continue;
+                    float dist = Vector3.Distance(transform.position, zone.transform.position);
+                    if (dist < nearestZoneDistance)
+                    {
+                        nearestZoneDistance = dist;
+                        targetZone = zone;
+                    }
+                }
+
+                if (targetZone != null)
+                {
+                    currentHandZone?.ClearInputState();
+                    StartCoroutine(PlayEventCard(targetZone, currentHandZone));
+                    return;
+                }
+
+                if (currentHandZone != null && currentHandZone.TryReturnCardToHome(this))
+                {
+                    return;
+                }
+
+                StartCoroutine(ReleaseDrop());
+                return;
+            }
 
             // 找到最近的可用槽位
             CardSlotBehaviour nearestSlot = null;
@@ -1098,8 +1152,6 @@ public class CardView3D : MonoBehaviour
                     nearestSlot = slot;
                 }
             }
-
-            var currentHandZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
 
             if (nearestSlot != null)
             {
@@ -1279,8 +1331,163 @@ public class CardView3D : MonoBehaviour
             }
         }
 
+        private IEnumerator PlayEventCard(EventPlayZone zone, EndfieldFrontierTCG.Hand.HandSplineZone originZone)
+        {
+            if (zone == null)
+            {
+                yield break;
+            }
+
+            Transform originalParent = transform.parent;
+            int originalLayer = gameObject.layer;
+
+            // 把卡牌临时从手牌层级中移除，避免 HandSplineZone 继续管控
+            transform.SetParent(null, true);
+
+            originZone?.UnregisterCard(this);
+
+            Transform savedHomeParent = _homeParent;
+            Vector3 savedHomeLocalPos = _homeLocalPos;
+            Quaternion savedHomeLocalRot = _homeLocalRot;
+            Vector3 savedHomePos = _homePos;
+            Quaternion savedHomeRot = _homeRot;
+            bool savedHomeSet = _homeSet;
+
+            handIndex = -1;
+            slotIndex = -1;
+            _homeSet = false;
+
+            IsReturningHome = true;
+
+            Rigidbody rb = body;
+            bool hasBody = rb != null;
+            bool prevDetect = false, prevGravity = false, prevKinematic = false;
+            RigidbodyConstraints prevConstraints = RigidbodyConstraints.None;
+
+            if (hasBody)
+            {
+                prevDetect = rb.detectCollisions;
+                prevGravity = rb.useGravity;
+                prevKinematic = rb.isKinematic;
+                prevConstraints = rb.constraints;
+                rb.detectCollisions = false;
+                rb.useGravity = false;
+                rb.isKinematic = true;
+                rb.constraints = RigidbodyConstraints.FreezeAll;
+            }
+
+            if (box != null) box.enabled = false;
+
+            gameObject.layer = LayerMask.NameToLayer("Ignore Raycast");
+
+            zone.GetPlacementForCard(this, out Vector3 landingPos, out Quaternion landingRot, out Vector3 exitPos);
+            landingRot = AlignToTableRotation(landingRot);
+
+            Vector3 startPos = transform.position;
+            Quaternion startRot = AlignToTableRotation(transform.rotation);
+            transform.rotation = startRot;
+
+            Vector3 displayPos = landingPos;
+            Quaternion displayRot = landingRot;
+            if (zone.TryGetDisplayPose(out Vector3 dispPos, out Quaternion dispRot))
+            {
+                displayPos = dispPos;
+                displayRot = AlignToTableRotation(dispRot);
+            }
+
+            Vector3 travelStartPos = startPos;
+            Quaternion travelStartRot = startRot;
+            displayPos = new Vector3(displayPos.x, startPos.y, displayPos.z);
+
+            float displayMoveDur = Mathf.Max(0.01f, zone.displayMoveDuration);
+            AnimationCurve displayCurve = zone.displayMoveCurve != null ? zone.displayMoveCurve : AnimationCurve.Linear(0f, 0f, 1f, 1f);
+
+            float t = 0f;
+            while (t < displayMoveDur)
+            {
+                t += Time.deltaTime;
+                float a = Mathf.Clamp01(t / displayMoveDur);
+                float w = displayCurve.Evaluate(a);
+                transform.position = Vector3.LerpUnclamped(travelStartPos, displayPos, w);
+                transform.rotation = Quaternion.Slerp(travelStartRot, displayRot, w);
+                yield return null;
+            }
+            transform.position = displayPos;
+            transform.rotation = displayRot;
+
+            float displayHold = Mathf.Max(0f, zone.displayHoldDuration);
+            if (displayHold > 0f) yield return new WaitForSeconds(displayHold);
+
+            exitPos = zone.GetExitPosition(displayPos);
+            exitPos = new Vector3(exitPos.x, startPos.y, exitPos.z);
+
+            float exitDur = Mathf.Max(0.01f, zone.exitDuration);
+            AnimationCurve exitCurve = zone.exitCurve != null ? zone.exitCurve : AnimationCurve.Linear(0f, 0f, 1f, 1f);
+            Vector3 exitStart = displayPos;
+            Quaternion exitRot = AlignToTableRotation(displayRot);
+
+            t = 0f;
+            while (t < exitDur)
+            {
+                t += Time.deltaTime;
+                float a = Mathf.Clamp01(t / exitDur);
+                float w = exitCurve.Evaluate(a);
+                transform.position = Vector3.LerpUnclamped(exitStart, exitPos, w);
+                transform.rotation = Quaternion.Slerp(exitRot, exitRot, w);
+                yield return null;
+            }
+
+            transform.position = exitPos;
+
+            float extraDelay = Mathf.Max(0f, zone.destroyAfterExitDelay);
+            if (extraDelay > 0f) yield return new WaitForSeconds(extraDelay);
+
+            if (zone.destroyOnExit)
+            {
+                Destroy(gameObject);
+            }
+            else
+            {
+                if (hasBody)
+                {
+                    rb.detectCollisions = prevDetect;
+                    rb.useGravity = prevGravity;
+                    rb.isKinematic = prevKinematic;
+                    rb.constraints = prevConstraints;
+                }
+
+                transform.SetParent(originalParent, true);
+                gameObject.layer = originalLayer;
+                gameObject.SetActive(false);
+
+                if (savedHomeSet)
+                {
+                    if (savedHomeParent != null)
+                    {
+                        Vector3 restoredPos = savedHomeParent.TransformPoint(savedHomeLocalPos);
+                        Quaternion restoredRot = savedHomeParent.rotation * savedHomeLocalRot;
+                        SetHomeFromZone(savedHomeParent, restoredPos, restoredRot);
+                    }
+                    else
+                    {
+                        SetHomePose(savedHomePos, savedHomeRot);
+                    }
+                }
+            }
+
+            IsReturningHome = false;
+            _state = DragState.Idle;
+        }
+
     private void ApplyFollowLean(Vector3 velocity)
     {
+        if (IsEventCard)
+        {
+            float alpha = 1f - Mathf.Exp(-followLeanResponsiveness * Time.deltaTime);
+            transform.rotation = Quaternion.Slerp(transform.rotation, _baseRot, alpha);
+            return;
+        }
+
         Vector3 vPlanar = Vector3.ProjectOnPlane(velocity, Vector3.up);
         float vMag = vPlanar.magnitude;
 
@@ -1593,6 +1800,24 @@ public class CardView3D : MonoBehaviour
         return angle;
     }
 
+    private static CardCategory ParseCategory(string type)
+    {
+        if (string.IsNullOrWhiteSpace(type)) return CardCategory.Unknown;
+        string t = type.Trim().ToLowerInvariant();
+        switch (t)
+        {
+            case "unit":
+            case "units":
+                return CardCategory.Unit;
+            case "event":
+            case "events":
+            case "spell":
+                return CardCategory.Event;
+            default:
+                return CardCategory.Unknown;
+        }
+    }
+
     // 在 [-limit, limit] 上的软夹紧：中心段线性，接近边缘时用平滑曲线减速
     private static float SoftClamp(float v, float limit)
     {
@@ -1604,6 +1829,12 @@ public class CardView3D : MonoBehaviour
         float eased = 1f - (1f - over) * (1f - over);   // easeOutQuad
         float scaled = Mathf.Lerp(Mathf.Abs(v), limit, eased);
         return sign * Mathf.Min(scaled, limit);
+    }
+
+    private static Quaternion AlignToTableRotation(Quaternion rot)
+    {
+        Vector3 euler = rot.eulerAngles;
+        return Quaternion.Euler(90f, euler.y, 0f);
     }
 
     private float GetMaxAxisDeviationDeg(Quaternion q)
