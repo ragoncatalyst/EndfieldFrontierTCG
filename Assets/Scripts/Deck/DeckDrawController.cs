@@ -131,7 +131,7 @@ namespace EndfieldFrontierTCG.Deck
             {
                 cardObj.transform.SetParent(handZone.transform, true);
                 handZone.RegisterCard(view);
-                handZone.RealignCards(view, repositionExisting: false);
+                handZone.RealignCards(view, repositionExisting: true);
                 StartCoroutine(ReturnWithFlip(view, spawnRot));
             }
             else

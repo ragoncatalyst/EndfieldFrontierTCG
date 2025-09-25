@@ -131,6 +131,10 @@ namespace EndfieldFrontierTCG.Hand
 		// Compact mapping: other cards -> reassigned contiguous slots around center (visual only)
 		private readonly System.Collections.Generic.Dictionary<CardView3D, int> _origSlotIndex = new System.Collections.Generic.Dictionary<CardView3D, int>();
 		private readonly System.Collections.Generic.Dictionary<CardView3D, int> _compactAssignedSlot = new System.Collections.Generic.Dictionary<CardView3D, int>();
+		// Drag gap reservation: temporarily remove dragged card so the rest can snap to center immediately
+		private CardView3D _reservedGapCard = null;
+		private int _reservedGapSlot = -1;
+		private int _reservedGapInsertIndex = -1;
 
         private Coroutine _returnCo = null;
 
@@ -365,11 +369,13 @@ namespace EndfieldFrontierTCG.Hand
 						_activeDragging = true;
 						_activePressed.ExternalBeginDrag();
 						_activePressed.ExternalDrag();
-						// 开启并拢：记录被拖拽的卡与其原槽位，其他牌向中心收拢但保留各自原始 slotIndex
 						_draggingCard = _activePressed;
 						_draggingSlot = (_draggingCard != null) ? _draggingCard.slotIndex : -1;
-						_compactOnDrag = (_draggingSlot >= 0);
-						if (_compactOnDrag) BuildCompactMapping();
+						if (_draggingCard != null && _draggingSlot >= 0)
+						{
+							ReserveGapForCard(_draggingCard, _draggingSlot);
+						}
+						_compactOnDrag = false;
 					}
 					else if (_activeDragging)
 					{
@@ -384,16 +390,7 @@ namespace EndfieldFrontierTCG.Hand
 				if (_activeDragging && _activePressed != null) _activePressed.ExternalEndDrag();
 				_activePressed = null; _pressing = false; _activeDragging = false;
 				// 停止并拢，给归位的卡保留原位
-<<<<<<< ours
 				_compactOnDrag = false; _draggingCard = null; _draggingSlot = -1;
-=======
-				_compactOnDrag = false;
-				if (_draggingCard != null)
-				{
-					RestoreGapForCard(_draggingCard);
-				}
-				_draggingCard = null; _draggingSlot = -1;
->>>>>>> theirs
 				// 松开后允许悬停动画重新工作
 				UpdateHoverByRay();
 			}
@@ -407,6 +404,7 @@ namespace EndfieldFrontierTCG.Hand
 			_activeDragging = false;
 			_compactOnDrag = false; _draggingCard = null; _draggingSlot = -1;
 			_compactAssignedSlot.Clear(); _origSlotIndex.Clear();
+			_reservedGapCard = null; _reservedGapSlot = -1; _reservedGapInsertIndex = -1;
 		}
 
 		private void UpdateHoverByRay()
@@ -484,27 +482,26 @@ namespace EndfieldFrontierTCG.Hand
             ForceRelayoutExistingCards();
         }
 
-        public void UnregisterCard(CardView3D card)
-        {
-            if (card == null) return;
-            
-            // 从卡牌数组中移除
-            if (_cards != null)
-            {
-                var newCards = new List<CardView3D>();
-                for (int i = 0; i < _cards.Length; i++)
-                {
-                    if (_cards[i] != null && _cards[i] != card)
-                    {
-                        newCards.Add(_cards[i]);
-                    }
-                }
-                _cards = newCards.ToArray();
-            }
-            
-            // 清理卡牌的手牌相关状态
-            if (card.handIndex >= 0)
-            {
+		public void UnregisterCard(CardView3D card)
+		{
+			if (card == null) return;
+			
+			// 从卡牌数组中移除
+			if (_cards != null)
+			{
+				var newCards = new List<CardView3D>(_cards.Length);
+				for (int i = 0; i < _cards.Length; i++)
+				{
+					var existing = _cards[i];
+					if (existing == null || existing == card) continue;
+					newCards.Add(existing);
+				}
+				_cards = newCards.ToArray();
+			}
+			
+			// 清理卡牌的手牌相关状态
+			if (card.handIndex >= 0)
+			{
                 card.handIndex = -1;
                 card.slotIndex = -1;
             }
@@ -525,32 +522,37 @@ namespace EndfieldFrontierTCG.Hand
                 _activeDragging = false;
             }
             
-            // 如果这张卡是当前拖拽的卡，清除拖拽状态
-            if (_draggingCard == card)
-            {
-                _draggingCard = null;
-                _draggingSlot = -1;
-                _compactOnDrag = false;
-            }
-            
-            // 从压缩映射中移除
-            _origSlotIndex.Remove(card);
-            _compactAssignedSlot.Remove(card);
-            
-            Debug.Log($"[HandSplineZone] 卡牌已从手牌区域注销: {card.name}");
-            
-            // 重新初始化剩余卡牌的索引
-            for (int i = 0; i < _cards.Length; i++)
-            {
-                if (_cards[i] != null)
-                {
-                    _cards[i].handIndex = i;
-                }
-            }
-            
-            // 强制重新布局剩余卡牌
-            ForceRelayoutExistingCards();
-        }
+			// 如果这张卡是当前拖拽的卡，清除拖拽状态
+			if (_draggingCard == card)
+			{
+				_draggingCard = null;
+				_draggingSlot = -1;
+				_compactOnDrag = false;
+			}
+			if (_reservedGapCard == card)
+			{
+				_reservedGapCard = null;
+				_reservedGapSlot = -1;
+				_reservedGapInsertIndex = -1;
+			}
+			
+			// 从压缩映射中移除
+			_origSlotIndex.Remove(card);
+			_compactAssignedSlot.Remove(card);
+			
+			Debug.Log($"[HandSplineZone] 卡牌已从手牌区域注销: {card.name}");
+			
+			// 重新初始化剩余卡牌的索引
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				if (_cards[i] != null)
+				{
+					_cards[i].handIndex = i;
+				}
+			}
+
+			RealignCards(null, true);
+		}
 
 		public void ForceRelayoutExistingCards()
 		{
@@ -863,11 +865,6 @@ namespace EndfieldFrontierTCG.Hand
 
 			int startSlot = Mathf.Clamp((slots - active.Count) / 2, 0, Mathf.Max(0, slots - active.Count));
 			for (int i = 0; i < active.Count; i++)
-<<<<<<< ours
-<<<<<<< ours
-=======
-=======
->>>>>>> theirs
 			{
 				var card = active[i];
 				int targetSlot = Mathf.Clamp(startSlot + i, 0, Mathf.Max(0, slots - 1));
@@ -882,84 +879,113 @@ namespace EndfieldFrontierTCG.Hand
 				}
 			}
 
-			if (newlyAdded != null && repositionExisting)
-			{
-				if (_returnCo != null) StopCoroutine(_returnCo);
-				_returnCo = StartCoroutine(SmoothMoveCardToHome(newlyAdded, returnAheadZ, returnPhase1, returnPhase2));
-			}
 		}
 
 		private void ReserveGapForCard(CardView3D card, int originalSlot)
 		{
-			if (card == null || originalSlot < 0) return;
+			if (card == null) return;
+			if (_reservedGapCard == card) return;
+			if (_cards == null || _cards.Length == 0) return;
+
+			var list = new List<CardView3D>(_cards.Length);
+			_reservedGapInsertIndex = -1;
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				var current = _cards[i];
+				if (current == null) continue;
+				if (current == card)
+				{
+					_reservedGapInsertIndex = list.Count;
+					continue;
+				}
+				list.Add(current);
+			}
+
+			_cards = list.ToArray();
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				if (_cards[i] != null) _cards[i].handIndex = i;
+			}
+
 			_reservedGapCard = card;
 			_reservedGapSlot = originalSlot;
+			if (_reservedGapInsertIndex < 0)
+				_reservedGapInsertIndex = Mathf.Clamp(originalSlot, 0, Mathf.Max(0, _cards.Length));
+
+			card.handIndex = -1;
+			card.slotIndex = originalSlot;
+			_compactOnDrag = false;
+			_origSlotIndex.Clear();
+			_compactAssignedSlot.Clear();
+
+			RealignCards(null, true);
+		}
+
+		private void RestoreGapForCard(CardView3D card, bool animateReturning)
+		{
+			if (card == null) return;
+
 			var list = new List<CardView3D>();
-			if (_cards != null)
->>>>>>> theirs
+			if (_cards != null && _cards.Length > 0)
 			{
-				var card = active[i];
-				int targetSlot = Mathf.Clamp(startSlot + i, 0, Mathf.Max(0, slots - 1));
-				var pos = GetSlotWorldPosition(targetSlot);
-				var rot = GetSlotWorldRotation(targetSlot);
-				card.slotIndex = targetSlot;
-				card.SetHomeFromZone(transform, pos, rot);
-				card.handIndex = i;
-				if (card != newlyAdded && repositionExisting)
+				for (int i = 0; i < _cards.Length; i++)
 				{
-					card.SnapTo(pos, rot);
+					var current = _cards[i];
+					if (current != null && current != card) list.Add(current);
 				}
 			}
 
-<<<<<<< ours
-			if (newlyAdded != null && repositionExisting)
+			int insertIndex = list.Count;
+			if (_reservedGapCard == card && _reservedGapInsertIndex >= 0)
+				insertIndex = Mathf.Clamp(_reservedGapInsertIndex, 0, list.Count);
+			else if (_reservedGapSlot >= 0)
+				insertIndex = Mathf.Clamp(_reservedGapSlot, 0, list.Count);
+			else if (card.slotIndex >= 0)
+				insertIndex = Mathf.Clamp(card.slotIndex, 0, list.Count);
+
+			if (!list.Contains(card))
 			{
-				if (_returnCo != null) StopCoroutine(_returnCo);
-				_returnCo = StartCoroutine(SmoothMoveCardToHome(newlyAdded, returnAheadZ, returnPhase1, returnPhase2));
+				insertIndex = Mathf.Clamp(insertIndex, 0, list.Count);
+				list.Insert(insertIndex, card);
 			}
-=======
-		private void RestoreGapForCard(CardView3D card)
-		{
-			if (card == null) return;
-			if (card != _reservedGapCard)
+
+			_cards = list.ToArray();
+			for (int i = 0; i < _cards.Length; i++)
 			{
-				RealignCards(null, true);
-				return;
+				if (_cards[i] != null) _cards[i].handIndex = i;
 			}
-			int insertSlot = Mathf.Clamp(_reservedGapSlot, 0, Mathf.Max(0, slots - 1));
+
 			_reservedGapCard = null;
 			_reservedGapSlot = -1;
-			RegisterCard(card);
-			card.slotIndex = insertSlot;
-			var pos = GetSlotWorldPosition(insertSlot);
-			var rot = GetSlotWorldRotation(insertSlot);
-			card.SetHomeFromZone(transform, pos, rot);
-			RealignCards(null, true);
->>>>>>> theirs
+			_reservedGapInsertIndex = -1;
+
+			if (animateReturning)
+			{
+				RealignCards(card, true);
+				if (_returnCo != null) StopCoroutine(_returnCo);
+				_returnCo = StartCoroutine(SmoothMoveCardToHome(card, returnAheadZ, returnPhase1, returnPhase2));
+			}
+			else
+			{
+				RealignCards(null, true);
+			}
 		}
 
-        public bool TryReturnCardToHome(CardView3D card)
-        {
-            if (card == null) return false;
-            
-            // 检查卡牌是否已经被放置到槽位中
-            var cardSlot = card.transform.parent?.GetComponent<CardSlotBehaviour>();
-            if (cardSlot != null)
-            {
-                // 如果卡牌已经在槽位中，不要让它返回手牌
-                Debug.Log($"[HandSplineZone] 卡牌已在槽位中，不返回手牌: {card.name}");
-                return false;
-            }
+		public bool TryReturnCardToHome(CardView3D card)
+		{
+			if (card == null) return false;
 
-            if (!card.IsDragging)
-            {
-                // 改为由 HandSplineZone 启动协程，统一使用本组件的曲线与参数
-                if (_returnCo != null) StopCoroutine(_returnCo);
-                _returnCo = StartCoroutine(SmoothMoveCardToHome(card, returnAheadZ, returnPhase1, returnPhase2));
-                Debug.Log($"[HandSplineZone] 卡牌开始二段式返回 (由 HandSplineZone 驱动): {card.name}, 前向偏移: {returnAheadZ}米, 阶段1: {returnPhase1}秒, 阶段2: {returnPhase2}秒");
-            }
-            return true;
-        }
+			var cardSlot = card.transform.parent?.GetComponent<CardSlotBehaviour>();
+			if (cardSlot != null)
+			{
+				Debug.Log($"[HandSplineZone] 卡牌已在槽位中，不返回手牌: {card.name}");
+				return false;
+			}
+
+			RestoreGapForCard(card, animateReturning: true);
+			Debug.Log($"[HandSplineZone] 卡牌开始返回手牌: {card.name}");
+			return true;
+		}
 
 		public bool TrySnap(CardView3D card)
 		{
