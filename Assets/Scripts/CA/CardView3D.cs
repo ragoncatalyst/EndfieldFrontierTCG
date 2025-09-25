@@ -222,6 +222,7 @@ public class CardView3D : MonoBehaviour
     public bool IsReturningHome { get; private set; }
     private Renderer[] _allRenderers;
     private int[] _origSortingOrders;
+    private int[] _handBaseSortingOrders;
     // 移除临时材质/排序强制逻辑，避免停顿与回撤
 
     [Header("Hover Collider Extend")]
@@ -1998,6 +1999,31 @@ public class CardView3D : MonoBehaviour
             box.size = _boxOrigSize;
             box.center = _boxOrigCenter;
             _boxExtended = false;
+        }
+    }
+    public void ApplyHandRenderOrder(int order)
+    {
+        if (_allRenderers == null || _allRenderers.Length == 0) _allRenderers = GetComponentsInChildren<Renderer>(true);
+        if (_allRenderers == null) return;
+        if (_handBaseSortingOrders == null || _handBaseSortingOrders.Length != _allRenderers.Length)
+        {
+            _handBaseSortingOrders = new int[_allRenderers.Length];
+            for (int i = 0; i < _allRenderers.Length; i++)
+            {
+                var rInit = _allRenderers[i];
+                _handBaseSortingOrders[i] = rInit != null ? rInit.sortingOrder : 0;
+            }
+        }
+        if (_origSortingOrders == null || _origSortingOrders.Length != _allRenderers.Length)
+            _origSortingOrders = new int[_allRenderers.Length];
+
+        for (int i = 0; i < _allRenderers.Length; i++)
+        {
+            var r = _allRenderers[i]; if (r == null) continue;
+            int baseOrder = _handBaseSortingOrders[i];
+            int finalOrder = baseOrder + order;
+            r.sortingOrder = finalOrder;
+            _origSortingOrders[i] = finalOrder;
         }
     }
 }

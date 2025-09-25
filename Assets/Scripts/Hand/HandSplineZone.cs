@@ -131,10 +131,16 @@ namespace EndfieldFrontierTCG.Hand
 		// Compact mapping: other cards -> reassigned contiguous slots around center (visual only)
 		private readonly System.Collections.Generic.Dictionary<CardView3D, int> _origSlotIndex = new System.Collections.Generic.Dictionary<CardView3D, int>();
 		private readonly System.Collections.Generic.Dictionary<CardView3D, int> _compactAssignedSlot = new System.Collections.Generic.Dictionary<CardView3D, int>();
+		private readonly Dictionary<CardView3D, float> _targetUnits = new Dictionary<CardView3D, float>();
+		[SerializeField]
+		private float _baseSpacingUnits = 1f;
+		[SerializeField]
+		private int _renderOrderStep = 5;
 		// Drag gap reservation: temporarily remove dragged card so the rest can snap to center immediately
 		private CardView3D _reservedGapCard = null;
 		private int _reservedGapSlot = -1;
 		private int _reservedGapInsertIndex = -1;
+		private readonly Dictionary<CardView3D, Coroutine> _repositionCos = new Dictionary<CardView3D, Coroutine>();
 
         private Coroutine _returnCo = null;
 
@@ -405,6 +411,7 @@ namespace EndfieldFrontierTCG.Hand
 			_compactOnDrag = false; _draggingCard = null; _draggingSlot = -1;
 			_compactAssignedSlot.Clear(); _origSlotIndex.Clear();
 			_reservedGapCard = null; _reservedGapSlot = -1; _reservedGapInsertIndex = -1;
+			_targetUnits.Clear();
 		}
 
 		private void UpdateHoverByRay()
@@ -487,6 +494,7 @@ namespace EndfieldFrontierTCG.Hand
 			if (card == null) return;
 			
 			// 从卡牌数组中移除
+			CancelRepositionAnimation(card);
 			if (_cards != null)
 			{
 				var newCards = new List<CardView3D>(_cards.Length);
@@ -539,6 +547,7 @@ namespace EndfieldFrontierTCG.Hand
 			// 从压缩映射中移除
 			_origSlotIndex.Remove(card);
 			_compactAssignedSlot.Remove(card);
+			_targetUnits.Remove(card);
 			
 			Debug.Log($"[HandSplineZone] 卡牌已从手牌区域注销: {card.name}");
 			
@@ -658,17 +667,30 @@ namespace EndfieldFrontierTCG.Hand
 				lineXZ.Normalize();
 				Vector3 liftDir = new Vector3(-lineXZ.z, 0f, lineXZ.x);
 
-				for (int i = 0; i < _cards.Length; i++)
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				var c = _cards[i]; if (c == null) continue;
+				bool isHoveredNow = (i == _hoverIndex);
+				try { c.SetInfoVisible(isHoveredNow); c.ApplyHoverColliderExtend(isHoveredNow); } catch {}
+				if (c.IsReturningHome) continue;
+				if (_repositionCos.ContainsKey(c)) continue;
+				// 被拖拽的牌：完全从自动布局中排除
+				if (_activeDragging && _draggingCard != null && c == _draggingCard) continue;
+				float units;
+				if (!_targetUnits.TryGetValue(c, out units))
 				{
-					var c = _cards[i]; if (c == null) continue;
-					bool isHoveredNow = (i == _hoverIndex);
-					try { c.SetInfoVisible(isHoveredNow); c.ApplyHoverColliderExtend(isHoveredNow); } catch {}
-					if (c.IsReturningHome) continue;
-					// 被拖拽的牌：完全从自动布局中排除
-					if (_activeDragging && _draggingCard != null && c == _draggingCard) continue;
-					int sIdx = _cards[i].slotIndex >= 0 ? _cards[i].slotIndex : i;
-					Vector3 p; Quaternion r; TryGetSlotPose(sIdx, out p, out r);
-					Vector3 target = p; Quaternion rot = r;
+					if (_cards[i].slotIndex >= 0)
+						units = _cards[i].slotIndex - (slots - 1) * 0.5f;
+					else
+						units = i - (_cards.Length - 1) * 0.5f;
+				}
+				int approxSlot = Mathf.Clamp(Mathf.RoundToInt(units + (slots - 1) * 0.5f), 0, Mathf.Max(0, slots - 1));
+				Vector3 p; Quaternion r;
+				if (!TryGetPoseByUnits(units, out p, out r))
+				{
+					TryGetSlotPose(approxSlot, out p, out r);
+				}
+				Vector3 target = p; Quaternion rot = r;
 					// 并拢排序：当有卡被拖出时，其余卡被重新连续编号到中心附近的槽位
 					if (_compactOnDrag && (_draggingCard == null || c != _draggingCard))
 					{
@@ -676,13 +698,14 @@ namespace EndfieldFrontierTCG.Hand
 						{
 							Vector3 p2; Quaternion r2; TryGetSlotPose(assigned, out p2, out r2);
 							target = p2; rot = r2;
+							approxSlot = assigned;
 						}
 					}
 					if (_hoverIndex >= 0)
                     {
                         int hoveredSlot = (_cards[_hoverIndex].slotIndex >= 0) ? _cards[_hoverIndex].slotIndex : _hoverIndex;
-                        bool isLeft = sIdx < hoveredSlot;
-                        bool isRight = sIdx > hoveredSlot;
+                        bool isLeft = approxSlot < hoveredSlot;
+                        bool isRight = approxSlot > hoveredSlot;
                         // 把原本的线性/MoveTowards 数值通过 Inspector 曲线映射为最终 local factor（0..1）
                         float mappedPX = (hoverCardMoveCurve != null && otherCardsMoveCurve != null) ? 
                             ((i == _hoverIndex) ? hoverCardMoveCurve.Evaluate(px) : otherCardsMoveCurve.Evaluate(px)) : px;
@@ -863,22 +886,84 @@ namespace EndfieldFrontierTCG.Hand
 				return orderA.CompareTo(orderB);
 			});
 
-			int startSlot = Mathf.Clamp((slots - active.Count) / 2, 0, Mathf.Max(0, slots - active.Count));
+			_targetUnits.Clear();
+			int maxSlot = Mathf.Max(0, slots - 1);
+			float startUnit = -((active.Count - 1) * 0.5f) * _baseSpacingUnits;
 			for (int i = 0; i < active.Count; i++)
 			{
 				var card = active[i];
-				int targetSlot = Mathf.Clamp(startSlot + i, 0, Mathf.Max(0, slots - 1));
-				var pos = GetSlotWorldPosition(targetSlot);
-				var rot = GetSlotWorldRotation(targetSlot);
+				float units = startUnit + i * _baseSpacingUnits;
+				float slotF = units + (slots - 1) * 0.5f;
+				int baseSlot = Mathf.Clamp(Mathf.FloorToInt(slotF), 0, maxSlot);
+				int nextSlot = Mathf.Clamp(baseSlot + 1, 0, maxSlot);
+				float t = Mathf.Clamp01(slotF - baseSlot);
+				Vector3 posA, posB; Quaternion rotA, rotB;
+				if (!TryGetSlotPose(baseSlot, out posA, out rotA))
+				{
+					posA = transform.position;
+					rotA = transform.rotation;
+				}
+				if (!TryGetSlotPose(nextSlot, out posB, out rotB))
+				{
+					posB = posA;
+					rotB = rotA;
+				}
+				Vector3 pos = Vector3.LerpUnclamped(posA, posB, t);
+				Quaternion rot = Quaternion.Slerp(rotA, rotB, t);
+				int targetSlot = Mathf.Clamp(Mathf.RoundToInt(slotF), 0, maxSlot);
 				card.slotIndex = targetSlot;
 				card.SetHomeFromZone(transform, pos, rot);
 				card.handIndex = i;
-				if (card != newlyAdded && repositionExisting)
-				{
-					card.SnapTo(pos, rot);
-				}
+				_targetUnits[card] = units;
+				try { card.transform.SetSiblingIndex(i); } catch {}
+				try { card.ApplyHandRenderOrder(i * _renderOrderStep); } catch {}
+				if (!repositionExisting) continue;
+				if (card == newlyAdded) continue;
+				if (card == _draggingCard) continue;
+				if (card.IsReturningHome) continue;
+				AnimateCardToSlot(card, pos, rot, true);
 			}
+			_cards = active.ToArray();
 
+		}
+
+		public void ApplyTwoPhaseHome(CardView3D card, out Vector3 targetPos, out Quaternion targetRot)
+		{
+			targetPos = transform.position;
+			targetRot = transform.rotation;
+			if (card == null) return;
+			if (!_targetUnits.TryGetValue(card, out float units))
+			{
+				units = (_cards != null && card.handIndex >= 0 && card.handIndex < _cards.Length)
+					? (_targetUnits.TryGetValue(_cards[card.handIndex], out float uCached) ? uCached : (card.handIndex - (_cards.Length - 1) * 0.5f) * _baseSpacingUnits)
+					: (_baseSpacingUnits * (_cards.Length - 1) * 0.5f);
+			}
+			float slotF = units + (slots - 1) * 0.5f;
+			int maxSlot = Mathf.Max(0, slots - 1);
+			int baseSlot = Mathf.Clamp(Mathf.FloorToInt(slotF), 0, maxSlot);
+			int nextSlot = Mathf.Clamp(baseSlot + 1, 0, maxSlot);
+			float t = Mathf.Clamp01(slotF - baseSlot);
+			Vector3 posA, posB; Quaternion rotA, rotB;
+			if (!TryGetSlotPose(baseSlot, out posA, out rotA))
+			{
+				posA = transform.position;
+				rotA = transform.rotation;
+			}
+			if (!TryGetSlotPose(nextSlot, out posB, out rotB))
+			{
+				posB = posA;
+				rotB = rotA;
+			}
+			targetPos = Vector3.LerpUnclamped(posA, posB, t);
+			targetRot = Quaternion.Slerp(rotA, rotB, t);
+			card.SetHomeFromZone(transform, targetPos, targetRot);
+			int targetSlot = Mathf.Clamp(Mathf.RoundToInt(slotF), 0, maxSlot);
+			card.slotIndex = targetSlot;
+			_targetUnits[card] = units;
+			int siblingIndex = (_cards != null) ? System.Array.IndexOf(_cards, card) : targetSlot;
+			if (siblingIndex < 0) siblingIndex = targetSlot;
+			try { card.transform.SetSiblingIndex(siblingIndex); } catch {}
+			try { card.ApplyHandRenderOrder(siblingIndex * _renderOrderStep); } catch {}
 		}
 
 		private void ReserveGapForCard(CardView3D card, int originalSlot)
@@ -886,6 +971,7 @@ namespace EndfieldFrontierTCG.Hand
 			if (card == null) return;
 			if (_reservedGapCard == card) return;
 			if (_cards == null || _cards.Length == 0) return;
+			CancelRepositionAnimation(card);
 
 			var list = new List<CardView3D>(_cards.Length);
 			_reservedGapInsertIndex = -1;
@@ -917,6 +1003,7 @@ namespace EndfieldFrontierTCG.Hand
 			_compactOnDrag = false;
 			_origSlotIndex.Clear();
 			_compactAssignedSlot.Clear();
+			_targetUnits.Remove(card);
 
 			RealignCards(null, true);
 		}
@@ -924,6 +1011,7 @@ namespace EndfieldFrontierTCG.Hand
 		private void RestoreGapForCard(CardView3D card, bool animateReturning)
 		{
 			if (card == null) return;
+			CancelRepositionAnimation(card);
 
 			var list = new List<CardView3D>();
 			if (_cards != null && _cards.Length > 0)
@@ -1001,6 +1089,60 @@ namespace EndfieldFrontierTCG.Hand
 			}
 			if (bestIdx >= 0 && best <= snapDistance) return AssignCardToSlot(card, bestIdx);
 			return false;
+		}
+
+		private void AnimateCardToSlot(CardView3D card, Vector3 targetPos, Quaternion targetRot, bool instantIfClose)
+		{
+			if (card == null) return;
+			if (instantIfClose)
+			{
+				float dist = Vector3.Distance(card.transform.position, targetPos);
+				float ang = Quaternion.Angle(card.transform.rotation, targetRot);
+				if (dist <= 1e-3f && ang <= 0.5f)
+				{
+					card.transform.SetPositionAndRotation(targetPos, targetRot);
+					CancelRepositionAnimation(card);
+					return;
+				}
+			}
+
+			CancelRepositionAnimation(card);
+			Coroutine co = StartCoroutine(RepositionCardRoutine(card, targetPos, targetRot));
+			_repositionCos[card] = co;
+		}
+
+		private IEnumerator RepositionCardRoutine(CardView3D card, Vector3 targetPos, Quaternion targetRot)
+		{
+			Vector3 startPos = card.transform.position;
+			Quaternion startRot = card.transform.rotation;
+			float duration = Mathf.Max(0.01f, returnPhase1);
+			AnimationCurve curve = returnPhase1Curve_Other ?? AnimationCurve.Linear(0f, 0f, 1f, 1f);
+			float elapsed = 0f;
+			while (elapsed < duration && card != null)
+			{
+				elapsed += Time.deltaTime;
+				float u = Mathf.Clamp01(elapsed / duration);
+				float w = Mathf.Clamp01(curve.Evaluate(u));
+				Vector3 pos = Vector3.LerpUnclamped(startPos, targetPos, w);
+				Quaternion rot = Quaternion.Slerp(startRot, targetRot, w);
+				card.transform.SetPositionAndRotation(pos, rot);
+				yield return null;
+			}
+			if (card != null)
+			{
+				card.transform.SetPositionAndRotation(targetPos, targetRot);
+			}
+			_repositionCos.Remove(card);
+		}
+
+		private void CancelRepositionAnimation(CardView3D card)
+		{
+			if (card == null) return;
+			if (_repositionCos.TryGetValue(card, out var co) && co != null)
+			{
+				StopCoroutine(co);
+			}
+			_repositionCos.Remove(card);
 		}
 
 		public static bool TrySnapIntoAny(CardView3D card)

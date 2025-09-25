@@ -132,6 +132,7 @@ namespace EndfieldFrontierTCG.Deck
                 cardObj.transform.SetParent(handZone.transform, true);
                 handZone.RegisterCard(view);
                 handZone.RealignCards(view, repositionExisting: true);
+                handZone.ApplyTwoPhaseHome(view, out _, out _);
                 StartCoroutine(ReturnWithFlip(view, spawnRot));
             }
             else
@@ -155,9 +156,9 @@ namespace EndfieldFrontierTCG.Deck
             yield return null; // wait registration to settle
 
             int targetSlot = card.slotIndex >= 0 ? card.slotIndex : Mathf.Max(0, handZone.slots - 1);
-            Vector3 homePos = handZone.GetSlotWorldPosition(targetSlot);
-            Quaternion homeRot = handZone.GetSlotWorldRotation(targetSlot);
-            card.SetHomeFromZone(handZone.transform, homePos, homeRot);
+            Vector3 homePos;
+            Quaternion homeRot;
+            handZone.ApplyTwoPhaseHome(card, out homePos, out homeRot);
 
             float homeYaw = homeRot.eulerAngles.y;
             Quaternion baseRot = Quaternion.Euler(90f, homeYaw, 0f);
