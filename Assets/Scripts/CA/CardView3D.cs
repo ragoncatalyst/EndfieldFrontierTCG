@@ -804,6 +804,11 @@ public class CardView3D : MonoBehaviour
         if (debugHoverLogs) Debug.Log($"[CardView3D] Bind ok id={cardId} at {transform.position}");
     }
 
+    public void PlayEventSequence(EventPlayZone zone)
+    {
+        StartCoroutine(PlayEventCard(zone, null));
+    }
+
     public void SetInfoVisible(bool visible)
     {
         if (NameText != null) NameText.gameObject.SetActive(visible);

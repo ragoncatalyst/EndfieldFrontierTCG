@@ -384,7 +384,16 @@ namespace EndfieldFrontierTCG.Hand
 				if (_activeDragging && _activePressed != null) _activePressed.ExternalEndDrag();
 				_activePressed = null; _pressing = false; _activeDragging = false;
 				// 停止并拢，给归位的卡保留原位
+<<<<<<< ours
 				_compactOnDrag = false; _draggingCard = null; _draggingSlot = -1;
+=======
+				_compactOnDrag = false;
+				if (_draggingCard != null)
+				{
+					RestoreGapForCard(_draggingCard);
+				}
+				_draggingCard = null; _draggingSlot = -1;
+>>>>>>> theirs
 				// 松开后允许悬停动画重新工作
 				UpdateHoverByRay();
 			}
@@ -793,6 +802,142 @@ namespace EndfieldFrontierTCG.Hand
 			return true;
 		}
 
+		public Vector3 GetSlotWorldPosition(int index)
+		{
+			if (TryGetSlotPose(Mathf.Clamp(index, 0, Mathf.Max(0, slots - 1)), out var p, out _)) return p;
+			return transform.position;
+		}
+
+		public Quaternion GetSlotWorldRotation(int index)
+		{
+			if (TryGetSlotPose(Mathf.Clamp(index, 0, Mathf.Max(0, slots - 1)), out _, out var r)) return r;
+			return transform.rotation;
+		}
+
+		public int GetActiveCardCount()
+		{
+			if (_cards == null) return 0;
+			int count = 0;
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				if (_cards[i] != null && _cards[i].handIndex >= 0) count++;
+			}
+			return count;
+		}
+
+		public void RegisterCard(CardView3D card)
+		{
+			if (card == null) return;
+			var list = new List<CardView3D>();
+			if (_cards != null)
+			{
+				for (int i = 0; i < _cards.Length; i++)
+				{
+					var existing = _cards[i];
+					if (existing != null && existing != card) list.Add(existing);
+				}
+			}
+			if (!list.Contains(card)) list.Add(card);
+			_cards = list.ToArray();
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				if (_cards[i] != null) _cards[i].handIndex = i;
+			}
+		}
+
+		public void RealignCards(CardView3D newlyAdded = null, bool repositionExisting = true)
+		{
+			if (_cards == null || _cards.Length == 0) return;
+			var active = new List<CardView3D>();
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				if (_cards[i] != null) active.Add(_cards[i]);
+			}
+			if (active.Count == 0) return;
+			active.Sort((a, b) =>
+			{
+				int orderA = a.handIndex >= 0 ? a.handIndex : a.createId;
+				int orderB = b.handIndex >= 0 ? b.handIndex : b.createId;
+				return orderA.CompareTo(orderB);
+			});
+
+			int startSlot = Mathf.Clamp((slots - active.Count) / 2, 0, Mathf.Max(0, slots - active.Count));
+			for (int i = 0; i < active.Count; i++)
+<<<<<<< ours
+<<<<<<< ours
+=======
+=======
+>>>>>>> theirs
+			{
+				var card = active[i];
+				int targetSlot = Mathf.Clamp(startSlot + i, 0, Mathf.Max(0, slots - 1));
+				var pos = GetSlotWorldPosition(targetSlot);
+				var rot = GetSlotWorldRotation(targetSlot);
+				card.slotIndex = targetSlot;
+				card.SetHomeFromZone(transform, pos, rot);
+				card.handIndex = i;
+				if (card != newlyAdded && repositionExisting)
+				{
+					card.SnapTo(pos, rot);
+				}
+			}
+
+			if (newlyAdded != null && repositionExisting)
+			{
+				if (_returnCo != null) StopCoroutine(_returnCo);
+				_returnCo = StartCoroutine(SmoothMoveCardToHome(newlyAdded, returnAheadZ, returnPhase1, returnPhase2));
+			}
+		}
+
+		private void ReserveGapForCard(CardView3D card, int originalSlot)
+		{
+			if (card == null || originalSlot < 0) return;
+			_reservedGapCard = card;
+			_reservedGapSlot = originalSlot;
+			var list = new List<CardView3D>();
+			if (_cards != null)
+>>>>>>> theirs
+			{
+				var card = active[i];
+				int targetSlot = Mathf.Clamp(startSlot + i, 0, Mathf.Max(0, slots - 1));
+				var pos = GetSlotWorldPosition(targetSlot);
+				var rot = GetSlotWorldRotation(targetSlot);
+				card.slotIndex = targetSlot;
+				card.SetHomeFromZone(transform, pos, rot);
+				card.handIndex = i;
+				if (card != newlyAdded && repositionExisting)
+				{
+					card.SnapTo(pos, rot);
+				}
+			}
+
+<<<<<<< ours
+			if (newlyAdded != null && repositionExisting)
+			{
+				if (_returnCo != null) StopCoroutine(_returnCo);
+				_returnCo = StartCoroutine(SmoothMoveCardToHome(newlyAdded, returnAheadZ, returnPhase1, returnPhase2));
+			}
+=======
+		private void RestoreGapForCard(CardView3D card)
+		{
+			if (card == null) return;
+			if (card != _reservedGapCard)
+			{
+				RealignCards(null, true);
+				return;
+			}
+			int insertSlot = Mathf.Clamp(_reservedGapSlot, 0, Mathf.Max(0, slots - 1));
+			_reservedGapCard = null;
+			_reservedGapSlot = -1;
+			RegisterCard(card);
+			card.slotIndex = insertSlot;
+			var pos = GetSlotWorldPosition(insertSlot);
+			var rot = GetSlotWorldRotation(insertSlot);
+			card.SetHomeFromZone(transform, pos, rot);
+			RealignCards(null, true);
+>>>>>>> theirs
+		}
+
         public bool TryReturnCardToHome(CardView3D card)
         {
             if (card == null) return false;
@@ -1006,4 +1151,5 @@ namespace EndfieldFrontierTCG.Hand
             _returnCo = null;
         }
 	}
+	
 }
