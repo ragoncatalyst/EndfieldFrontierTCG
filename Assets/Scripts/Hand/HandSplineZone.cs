@@ -738,7 +738,10 @@ namespace EndfieldFrontierTCG.Hand
                             target += liftDir * (hoverX * mappedPY);
                     }
 					if (!vels.TryGetValue(c, out var vel)) vel = Vector3.zero;
-					c.transform.position = Vector3.SmoothDamp(c.transform.position, target, ref vel, 0.06f);
+					Vector3 smoothed = Vector3.SmoothDamp(c.transform.position, target, ref vel, 0.06f);
+					smoothed.y = target.y;
+					vel.y = 0f;
+					c.transform.position = smoothed;
 					vels[c] = vel;
 					c.transform.rotation = Quaternion.Slerp(c.transform.rotation, rot, Time.deltaTime / Mathf.Max(0.01f, hoverXLerp));
 				}
