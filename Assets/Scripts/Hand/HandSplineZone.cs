@@ -1165,159 +1165,157 @@ namespace EndfieldFrontierTCG.Hand
 			if (idx+1 < list.Count) right = list[idx+1];
 		}
 
+		private void GetCardTargetPose(CardView3D card, out Vector3 targetPos, out Quaternion targetRot)
+		{
+			targetPos = transform.position;
+			targetRot = transform.rotation;
+			if (card == null) return;
+
+			if (card.slotIndex >= 0 && TryGetSlotPose(card.slotIndex, out targetPos, out targetRot)) return;
+
+			var tryGetHome = card.GetType().GetMethod("GetHomePose", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+			if (tryGetHome != null)
+			{
+				if (tryGetHome.Invoke(card, null) is System.ValueTuple<Vector3, Quaternion> homePose)
+				{
+					targetPos = homePose.Item1;
+					targetRot = homePose.Item2;
+					return;
+				}
+			}
+
+			TryGetSlotPose((slots > 0) ? (slots - 1) / 2 : 0, out targetPos, out targetRot);
+		}
+
 		private IEnumerator SmoothMoveCardToHome(CardView3D card, float aheadZ, float phase1Dur, float phase2Dur)
-        {
-            if (card == null) yield break;
+		{
+			if (card == null) yield break;
 
-            // 标记返回状态，避免 HandSplineZone 的 hover/排布逻辑干扰
-            System.Reflection.PropertyInfo isReturningProp = null;
-            try
-            {
-                isReturningProp = card.GetType().GetProperty("IsReturningHome", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var setter = isReturningProp?.GetSetMethod(true);
-                setter?.Invoke(card, new object[] { true });
-            }
-            catch { }
+			System.Reflection.PropertyInfo isReturningProp = null;
+			try
+			{
+				isReturningProp = card.GetType().GetProperty("IsReturningHome", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+				var setter = isReturningProp?.GetSetMethod(true);
+				setter?.Invoke(card, new object[] { true });
+			}
+			catch { }
 
-            Rigidbody rb = card.body;
-            BoxCollider bx = card.box != null ? card.box : card.GetComponentInChildren<BoxCollider>(true);
-            bool hasBody = rb != null;
-            bool prevDetect = false, prevGravity = false, prevKinematic = false, prevBoxEnabled = false;
-            RigidbodyConstraints prevConstraints = RigidbodyConstraints.FreezeAll;
+			Rigidbody rb = card.body;
+			BoxCollider bx = card.box != null ? card.box : card.GetComponentInChildren<BoxCollider>(true);
+			bool hasBody = rb != null;
+			bool prevDetect = false, prevGravity = false, prevKinematic = false, prevBoxEnabled = false;
+			RigidbodyConstraints prevConstraints = RigidbodyConstraints.FreezeAll;
 
-            if (hasBody)
-            {
-                prevDetect = rb.detectCollisions;
-                prevGravity = rb.useGravity;
-                prevKinematic = rb.isKinematic;
-                prevConstraints = rb.constraints;
-                rb.detectCollisions = false;
-                rb.useGravity = false;
-                rb.isKinematic = true;
-                rb.constraints = RigidbodyConstraints.FreezeAll;
-            }
-            if (bx != null)
-            {
-                prevBoxEnabled = bx.enabled;
-                bx.enabled = false;
-            }
+			if (hasBody)
+			{
+				prevDetect = rb.detectCollisions;
+				prevGravity = rb.useGravity;
+				prevKinematic = rb.isKinematic;
+				prevConstraints = rb.constraints;
+				rb.detectCollisions = false;
+				rb.useGravity = false;
+				rb.isKinematic = true;
+				rb.constraints = RigidbodyConstraints.FreezeAll;
+			}
+			if (bx != null)
+			{
+				prevBoxEnabled = bx.enabled;
+				bx.enabled = false;
+			}
 
-            try
-            {
-                Vector3 startPos = card.transform.position;
-                Quaternion startRot = card.transform.rotation;
+			try
+			{
+				Vector3 startPos = card.transform.position;
+				Quaternion startRot = card.transform.rotation;
+				GetCardTargetPose(card, out Vector3 targetPos, out Quaternion targetRot);
 
-                // 目标姿态：优先使用 slotIndex 对应槽位，其次卡牌缓存的 HomePose
-                Vector3 targetPos = Vector3.zero; Quaternion targetRot = Quaternion.identity;
-                bool haveTargetPose = false;
-                if (card.slotIndex >= 0 && TryGetSlotPose(card.slotIndex, out targetPos, out targetRot))
-                {
-                    haveTargetPose = true;
-                }
-                else
-                {
-                    var tryGetHome = card.GetType().GetMethod("GetHomePose", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
-                    if (tryGetHome != null)
-                    {
-                        var res = tryGetHome.Invoke(card, null) as System.ValueTuple<Vector3, Quaternion>?;
-                        if (res.HasValue)
-                        {
-                            targetPos = res.Value.Item1;
-                            targetRot = res.Value.Item2;
-                            haveTargetPose = true;
-                        }
-                    }
-                }
+				Vector3 forwardDir = transform.forward;
+				if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
+				forwardDir.Normalize();
+				Vector3 aheadPos = targetPos + forwardDir * aheadZ;
+				float liftY = 0.04f;
+				aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
 
-                if (!haveTargetPose)
-                {
-                    if (!TryGetSlotPose((slots > 0) ? (slots - 1) / 2 : 0, out targetPos, out targetRot))
-                    {
-                        targetPos = transform.position;
-                        targetRot = transform.rotation;
-                    }
-                }
+				System.Func<AnimationCurve, float, float> evalCurve = (curve, t) =>
+				{
+					if (curve == null) return t;
+					return Mathf.Clamp01(curve.Evaluate(Mathf.Clamp01(t)));
+				};
 
-                // 第一阶段的目标点：沿本地 Z+ 方向提前，加入轻微抬升避免穿插
-                Vector3 forwardDir = transform.forward;
-                if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
-                forwardDir.Normalize();
-                Vector3 aheadPos = targetPos + forwardDir * aheadZ;
-                float liftY = 0.04f;
-                aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
+				if (phase1Dur > 1e-4f)
+				{
+					float t = 0f;
+					while (t < phase1Dur)
+					{
+						t += Time.deltaTime;
+						GetCardTargetPose(card, out targetPos, out targetRot);
+						aheadPos = targetPos + forwardDir * aheadZ;
+						aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
+						float u = Mathf.Clamp01(t / phase1Dur);
+						float w = evalCurve(returnPhase1Curve, u);
+						Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
+						Quaternion rot = Quaternion.Slerp(startRot, targetRot, w * 0.35f);
+						card.transform.SetPositionAndRotation(pos, rot);
+						yield return null;
+					}
+				}
+				else
+				{
+					card.transform.position = aheadPos;
+				}
 
-                System.Func<AnimationCurve, float, float> evalCurve = (curve, t) =>
-                {
-                    if (curve == null) return t;
-                    return Mathf.Clamp01(curve.Evaluate(Mathf.Clamp01(t)));
-                };
+				Vector3 phase2StartPos = card.transform.position;
+				Quaternion phase2StartRot = card.transform.rotation;
+				GetCardTargetPose(card, out targetPos, out targetRot);
 
-                // Phase 1：保持高度，朝前方过渡
-                if (phase1Dur > 1e-4f)
-                {
-                    float t = 0f;
-                    while (t < phase1Dur)
-                    {
-                        t += Time.deltaTime;
-                        float u = Mathf.Clamp01(t / phase1Dur);
-                        float w = evalCurve(returnPhase1Curve, u);
-                        Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
-                        Quaternion rot = Quaternion.Slerp(startRot, targetRot, w * 0.35f);
-                        card.transform.SetPositionAndRotation(pos, rot);
-                        yield return null;
-                    }
-                }
-                else
-                {
-                    card.transform.position = aheadPos;
-                }
+				if (phase2Dur > 1e-4f)
+				{
+					float t2 = 0f;
+					while (t2 < phase2Dur)
+					{
+						t2 += Time.deltaTime;
+						GetCardTargetPose(card, out targetPos, out targetRot);
+						float u = Mathf.Clamp01(t2 / phase2Dur);
+						float w = evalCurve(returnPhase2Curve, u);
+						Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, targetPos, w);
+						Quaternion rot = Quaternion.Slerp(phase2StartRot, targetRot, w);
+						card.transform.SetPositionAndRotation(pos, rot);
+						yield return null;
+					}
+				}
+				else
+				{
+					card.transform.position = targetPos;
+				}
 
-                Vector3 phase2StartPos = card.transform.position;
-                Quaternion phase2StartRot = card.transform.rotation;
+				card.transform.SetPositionAndRotation(targetPos, targetRot);
+				card.SetHomeFromZone(transform, targetPos, targetRot);
+			}
+			finally
+			{
+				if (hasBody)
+				{
+					rb.constraints = prevConstraints;
+					rb.detectCollisions = prevDetect;
+					rb.useGravity = prevGravity;
+					rb.isKinematic = prevKinematic;
+				}
+				if (bx != null) bx.enabled = prevBoxEnabled;
 
-                // Phase 2：从前方点回到槽位
-                if (phase2Dur > 1e-4f)
-                {
-                    float t2 = 0f;
-                    while (t2 < phase2Dur)
-                    {
-                        t2 += Time.deltaTime;
-                        float u = Mathf.Clamp01(t2 / phase2Dur);
-                        float w = evalCurve(returnPhase2Curve, u);
-                        Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, targetPos, w);
-                        Quaternion rot = Quaternion.Slerp(phase2StartRot, targetRot, w);
-                        card.transform.SetPositionAndRotation(pos, rot);
-                        yield return null;
-                    }
-                }
+				try
+				{
+					var setter2 = isReturningProp?.GetSetMethod(true);
+					setter2?.Invoke(card, new object[] { false });
+				}
+				catch { }
+			}
 
-                card.transform.SetPositionAndRotation(targetPos, targetRot);
-                card.SetHomeFromZone(transform, targetPos, targetRot);
-            }
-            finally
-            {
-                if (hasBody)
-                {
-                    rb.constraints = prevConstraints;
-                    rb.detectCollisions = prevDetect;
-                    rb.useGravity = prevGravity;
-                    rb.isKinematic = prevKinematic;
-                }
-                if (bx != null) bx.enabled = prevBoxEnabled;
+			var onRet = card.GetType().GetMethod("OnReturnedHome", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
+			if (onRet != null) onRet.Invoke(card, null);
 
-                try
-                {
-                    var setter2 = isReturningProp?.GetSetMethod(true);
-                    setter2?.Invoke(card, new object[] { false });
-                }
-                catch { }
-            }
+			_returnCo = null;
+		}
 
-            var onRet = card.GetType().GetMethod("OnReturnedHome", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
-            if (onRet != null) onRet.Invoke(card, null);
-
-            _returnCo = null;
-        }
 	}
 	
 }
