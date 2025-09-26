@@ -172,17 +172,22 @@ namespace EndfieldFrontierTCG.Deck
             AnimationCurve curve2 = handZone.returnPhase2Curve;
 
             Vector3 startPos = deckSpawnPoint.position;
-            Vector3 forward = handZone.transform.forward;
-            if (forward.sqrMagnitude < 1e-6f) forward = Vector3.forward;
-            forward.Normalize();
-            Vector3 aheadPos = homePos + forward * handZone.returnAheadZ;
-            aheadPos.y = Mathf.Max(homePos.y, startPos.y);
+            Vector3 forward = Vector3.forward;
+            Vector3 aheadPos = homePos;
 
             float flipThreshold = 0.7f;
             float t = 0f;
             while (t < phase1)
             {
                 t += Time.deltaTime;
+                handZone.GetCardTargetPose(card, out homePos, out homeRot);
+                forward = handZone.transform.forward;
+                if (forward.sqrMagnitude < 1e-6f) forward = Vector3.forward;
+                forward.y = 0f;
+                forward.Normalize();
+                aheadPos = homePos + forward * handZone.returnAheadZ;
+                aheadPos.y = Mathf.Max(homePos.y, startPos.y);
+                baseRot = Quaternion.Euler(90f, homeRot.eulerAngles.y, 0f);
                 float u = Mathf.Clamp01(t / phase1);
                 float w = curve1 != null ? curve1.Evaluate(u) : u;
                 Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
@@ -199,9 +204,16 @@ namespace EndfieldFrontierTCG.Deck
             while (t < phase2)
             {
                 t += Time.deltaTime;
+                handZone.GetCardTargetPose(card, out homePos, out homeRot);
+                forward = handZone.transform.forward;
+                if (forward.sqrMagnitude < 1e-6f) forward = Vector3.forward;
+                forward.y = 0f;
+                forward.Normalize();
+                baseRot = Quaternion.Euler(90f, homeRot.eulerAngles.y, 0f);
                 float u = Mathf.Clamp01(t / phase2);
                 float w = curve2 != null ? curve2.Evaluate(u) : u;
                 Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, homePos, w);
+                pos.z = homePos.z;
                 Quaternion rot = Quaternion.Slerp(phase2StartRot, baseRot, Mathf.Clamp01(w));
                 card.transform.SetPositionAndRotation(pos, rot);
                 yield return null;
