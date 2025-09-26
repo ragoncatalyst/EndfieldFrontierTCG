@@ -779,28 +779,13 @@ namespace EndfieldFrontierTCG.Hand
 
 		public bool TryGetPoseByUnits(float units, out Vector3 pos, out Quaternion rot)
 		{
-			Vector3 dirL = lineLocalDirection.sqrMagnitude < 1e-6f ? Vector3.right : lineLocalDirection.normalized;
-			Vector3 local = dirL * (units * lineSpacing);
-			local.y = lineLocalY;
-			Vector3 pWorld = transform.TransformPoint(local);
-			Vector3 fwdW = transform.TransformDirection(dirL);
-			Vector3 fwdXZ = new Vector3(fwdW.x, 0f, fwdW.z);
-			if (fwdXZ.sqrMagnitude < 1e-6f) fwdXZ = transform.forward;
-			fwdXZ.Normalize();
-			float yaw = 0f;
-			if (yawAlignToLineDirection)
+			if (slots <= 0)
 			{
-				yaw = Mathf.Atan2(fwdXZ.x, fwdXZ.z) * Mathf.Rad2Deg;
-				if (flipForward) yaw += 180f;
+				pos = transform.position;
+				rot = transform.rotation;
+				return false;
 			}
-			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
-			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
-			pos = pWorld + Vector3.up * offsetUp + fwdXZ * offsetForward;
-			if (stackDepthByIndex && Camera.main != null)
-			{
-				int order = reverseDepthOrder ? (int)(-units) : (int)(units);
-				pos += -Camera.main.transform.forward * (order * depthPerSlot);
-			}
+			EvaluatePoseForUnits(units, out pos, out rot, out _);
 			return true;
 		}
 
@@ -870,6 +855,35 @@ namespace EndfieldFrontierTCG.Hand
 			}
 		}
 
+		private void EvaluatePoseForUnits(float units, out Vector3 pos, out Quaternion rot, out int slotIndex)
+		{
+			pos = transform.position;
+			rot = transform.rotation;
+			slotIndex = Mathf.Clamp((slots - 1) / 2, 0, Mathf.Max(0, slots - 1));
+			if (slots <= 0) return;
+			float center = (slots - 1) * 0.5f;
+			float slotF = units + center;
+			int maxSlot = Mathf.Max(0, slots - 1);
+			int baseSlot = Mathf.Clamp(Mathf.FloorToInt(slotF), 0, maxSlot);
+			int nextSlot = Mathf.Clamp(baseSlot + 1, 0, maxSlot);
+			float t = Mathf.Clamp01(slotF - baseSlot);
+			Vector3 posA, posB; Quaternion rotA, rotB;
+			if (!TryGetSlotPose(baseSlot, out posA, out rotA))
+			{
+				posA = transform.position;
+				rotA = transform.rotation;
+			}
+			if (!TryGetSlotPose(nextSlot, out posB, out rotB))
+			{
+				posB = posA;
+				rotB = rotA;
+			}
+			pos = Vector3.LerpUnclamped(posA, posB, t);
+			rot = Quaternion.Slerp(rotA, rotB, t);
+			float bias = units < 0f ? -1e-3f : (units > 0f ? 1e-3f : 0f);
+			slotIndex = Mathf.Clamp(Mathf.RoundToInt(slotF + bias), 0, maxSlot);
+		}
+
 		public void RealignCards(CardView3D newlyAdded = null, bool repositionExisting = true)
 		{
 			if (_cards == null || _cards.Length == 0) return;
@@ -887,31 +901,13 @@ namespace EndfieldFrontierTCG.Hand
 			});
 
 			_targetUnits.Clear();
-			int maxSlot = Mathf.Max(0, slots - 1);
 			float startUnit = -((active.Count - 1) * 0.5f) * _baseSpacingUnits;
 			for (int i = 0; i < active.Count; i++)
 			{
 				var card = active[i];
 				float units = startUnit + i * _baseSpacingUnits;
-				float slotF = units + (slots - 1) * 0.5f;
-				int baseSlot = Mathf.Clamp(Mathf.FloorToInt(slotF), 0, maxSlot);
-				int nextSlot = Mathf.Clamp(baseSlot + 1, 0, maxSlot);
-				float t = Mathf.Clamp01(slotF - baseSlot);
-				Vector3 posA, posB; Quaternion rotA, rotB;
-				if (!TryGetSlotPose(baseSlot, out posA, out rotA))
-				{
-					posA = transform.position;
-					rotA = transform.rotation;
-				}
-				if (!TryGetSlotPose(nextSlot, out posB, out rotB))
-				{
-					posB = posA;
-					rotB = rotA;
-				}
-				Vector3 pos = Vector3.LerpUnclamped(posA, posB, t);
-				Quaternion rot = Quaternion.Slerp(rotA, rotB, t);
-				int targetSlot = Mathf.Clamp(Mathf.RoundToInt(slotF), 0, maxSlot);
-				card.slotIndex = targetSlot;
+				EvaluatePoseForUnits(units, out Vector3 pos, out Quaternion rot, out int slotIndex);
+				card.slotIndex = slotIndex;
 				card.SetHomeFromZone(transform, pos, rot);
 				card.handIndex = i;
 				_targetUnits[card] = units;
@@ -934,36 +930,24 @@ namespace EndfieldFrontierTCG.Hand
 			if (card == null) return;
 			if (!_targetUnits.TryGetValue(card, out float units))
 			{
-				units = (_cards != null && card.handIndex >= 0 && card.handIndex < _cards.Length)
-					? (_targetUnits.TryGetValue(_cards[card.handIndex], out float uCached) ? uCached : (card.handIndex - (_cards.Length - 1) * 0.5f) * _baseSpacingUnits)
-					: (_baseSpacingUnits * (_cards.Length - 1) * 0.5f);
+				int count = (_cards != null) ? _cards.Length : 0;
+				if (count <= 0)
+				{
+					count = Mathf.Max(1, (card.handIndex >= 0) ? card.handIndex + 1 : 1);
+				}
+				float start = -((count - 1) * 0.5f) * _baseSpacingUnits;
+				int index = (card.handIndex >= 0) ? Mathf.Clamp(card.handIndex, 0, count - 1) : (count - 1);
+				units = start + index * _baseSpacingUnits;
 			}
-			float slotF = units + (slots - 1) * 0.5f;
-			int maxSlot = Mathf.Max(0, slots - 1);
-			int baseSlot = Mathf.Clamp(Mathf.FloorToInt(slotF), 0, maxSlot);
-			int nextSlot = Mathf.Clamp(baseSlot + 1, 0, maxSlot);
-			float t = Mathf.Clamp01(slotF - baseSlot);
-			Vector3 posA, posB; Quaternion rotA, rotB;
-			if (!TryGetSlotPose(baseSlot, out posA, out rotA))
-			{
-				posA = transform.position;
-				rotA = transform.rotation;
-			}
-			if (!TryGetSlotPose(nextSlot, out posB, out rotB))
-			{
-				posB = posA;
-				rotB = rotA;
-			}
-			targetPos = Vector3.LerpUnclamped(posA, posB, t);
-			targetRot = Quaternion.Slerp(rotA, rotB, t);
+			EvaluatePoseForUnits(units, out targetPos, out targetRot, out int slotIndex);
 			card.SetHomeFromZone(transform, targetPos, targetRot);
-			int targetSlot = Mathf.Clamp(Mathf.RoundToInt(slotF), 0, maxSlot);
-			card.slotIndex = targetSlot;
+			card.slotIndex = slotIndex;
 			_targetUnits[card] = units;
-			int siblingIndex = (_cards != null) ? System.Array.IndexOf(_cards, card) : targetSlot;
-			if (siblingIndex < 0) siblingIndex = targetSlot;
-			try { card.transform.SetSiblingIndex(siblingIndex); } catch {}
-			try { card.ApplyHandRenderOrder(siblingIndex * _renderOrderStep); } catch {}
+			int siblingIndex = (_cards != null) ? System.Array.IndexOf(_cards, card) : slotIndex;
+			if (siblingIndex < 0) siblingIndex = slotIndex;
+			try { card.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, Mathf.Max(0, (_cards?.Length ?? 0) - 1))); } catch {}
+			int renderIndex = (card.handIndex >= 0) ? card.handIndex : siblingIndex;
+			try { card.ApplyHandRenderOrder(renderIndex * _renderOrderStep); } catch {}
 		}
 
 		private void ReserveGapForCard(CardView3D card, int originalSlot)
@@ -1171,6 +1155,12 @@ namespace EndfieldFrontierTCG.Hand
 			targetRot = transform.rotation;
 			if (card == null) return;
 
+			if (_targetUnits != null && _targetUnits.TryGetValue(card, out float unitsFromDict))
+			{
+				EvaluatePoseForUnits(unitsFromDict, out targetPos, out targetRot, out _);
+				return;
+			}
+
 			if (card.slotIndex >= 0 && TryGetSlotPose(card.slotIndex, out targetPos, out targetRot)) return;
 
 			var tryGetHome = card.GetType().GetMethod("GetHomePose", BindingFlags.Public | BindingFlags.Instance | BindingFlags.NonPublic);
@@ -1225,68 +1215,66 @@ namespace EndfieldFrontierTCG.Hand
 
 			try
 			{
-				Vector3 startPos = card.transform.position;
-				Quaternion startRot = card.transform.rotation;
-				GetCardTargetPose(card, out Vector3 targetPos, out Quaternion targetRot);
+                Vector3 startPos = card.transform.position;
+                Quaternion startRot = card.transform.rotation;
+                GetCardTargetPose(card, out Vector3 targetPos, out Quaternion targetRot);
 
-				Vector3 forwardDir = transform.forward;
-				if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
-				forwardDir.Normalize();
-				Vector3 aheadPos = targetPos + forwardDir * aheadZ;
-				float liftY = 0.04f;
-				aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
+                Vector3 forwardDir = transform.forward;
+                if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
+                forwardDir.Normalize();
+                Vector3 aheadPos = targetPos + forwardDir * aheadZ;
+                float liftY = 0.04f;
+                aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
 
-				System.Func<AnimationCurve, float, float> evalCurve = (curve, t) =>
-				{
-					if (curve == null) return t;
-					return Mathf.Clamp01(curve.Evaluate(Mathf.Clamp01(t)));
-				};
+                System.Func<AnimationCurve, float, float> evalCurve = (curve, t) =>
+                {
+                    if (curve == null) return t;
+                    return Mathf.Clamp01(curve.Evaluate(Mathf.Clamp01(t)));
+                };
 
-				if (phase1Dur > 1e-4f)
-				{
-					float t = 0f;
-					while (t < phase1Dur)
-					{
-						t += Time.deltaTime;
-						GetCardTargetPose(card, out targetPos, out targetRot);
-						aheadPos = targetPos + forwardDir * aheadZ;
-						aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
-						float u = Mathf.Clamp01(t / phase1Dur);
-						float w = evalCurve(returnPhase1Curve, u);
-						Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
-						Quaternion rot = Quaternion.Slerp(startRot, targetRot, w * 0.35f);
-						card.transform.SetPositionAndRotation(pos, rot);
-						yield return null;
-					}
-				}
-				else
-				{
-					card.transform.position = aheadPos;
-				}
+                if (phase1Dur > 1e-4f)
+                {
+                    float t = 0f;
+                    while (t < phase1Dur)
+                    {
+                        t += Time.deltaTime;
+                        float u = Mathf.Clamp01(t / phase1Dur);
+                        float w = evalCurve(returnPhase1Curve, u);
+                        Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
+                        Quaternion rot = Quaternion.Slerp(startRot, targetRot, w * 0.35f);
+                        card.transform.SetPositionAndRotation(pos, rot);
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    card.transform.position = aheadPos;
+                }
 
-				Vector3 phase2StartPos = card.transform.position;
-				Quaternion phase2StartRot = card.transform.rotation;
-				GetCardTargetPose(card, out targetPos, out targetRot);
+                Vector3 phase2StartPos = card.transform.position;
+                GetCardTargetPose(card, out targetPos, out targetRot);
+                phase2StartPos.y = targetPos.y;
+                card.transform.position = new Vector3(card.transform.position.x, targetPos.y, card.transform.position.z);
+                Quaternion phase2StartRot = card.transform.rotation;
 
-				if (phase2Dur > 1e-4f)
-				{
-					float t2 = 0f;
-					while (t2 < phase2Dur)
-					{
-						t2 += Time.deltaTime;
-						GetCardTargetPose(card, out targetPos, out targetRot);
-						float u = Mathf.Clamp01(t2 / phase2Dur);
-						float w = evalCurve(returnPhase2Curve, u);
-						Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, targetPos, w);
-						Quaternion rot = Quaternion.Slerp(phase2StartRot, targetRot, w);
-						card.transform.SetPositionAndRotation(pos, rot);
-						yield return null;
-					}
-				}
-				else
-				{
-					card.transform.position = targetPos;
-				}
+                if (phase2Dur > 1e-4f)
+                {
+                    float t2 = 0f;
+                    while (t2 < phase2Dur)
+                    {
+                        t2 += Time.deltaTime;
+                        float u = Mathf.Clamp01(t2 / phase2Dur);
+                        float w = evalCurve(returnPhase2Curve, u);
+                        Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, targetPos, w);
+                        Quaternion rot = Quaternion.Slerp(phase2StartRot, targetRot, w);
+                        card.transform.SetPositionAndRotation(pos, rot);
+                        yield return null;
+                    }
+                }
+                else
+                {
+                    card.transform.position = targetPos;
+                }
 
 				card.transform.SetPositionAndRotation(targetPos, targetRot);
 				card.SetHomeFromZone(transform, targetPos, targetRot);

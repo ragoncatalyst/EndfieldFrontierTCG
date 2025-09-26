@@ -1404,7 +1404,8 @@ public class CardView3D : MonoBehaviour
                 displayRot = AlignToTableRotation(dispRot);
             }
 
-            Quaternion flipStartRot = Quaternion.AngleAxis(180f - initialTiltDeg, Vector3.up) * displayRot;
+            Vector3 localYAxis = (displayRot * Vector3.up).normalized;
+            Quaternion flipStartRot = Quaternion.AngleAxis(180f - initialTiltDeg, localYAxis) * displayRot;
 
             Vector3 travelStartPos = startPos;
             Quaternion travelStartRot = flipStartRot;

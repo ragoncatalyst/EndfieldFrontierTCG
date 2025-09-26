@@ -398,7 +398,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 2100000, guid: 31321ba15b8f8eb4c954353edc038b1d, type: 2}
+  - {fileID: 2100000, guid: fdccc9fa004b64183ae5a886c447c222, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -1013,8 +1013,6 @@ MonoBehaviour:
   body: {fileID: 1756036514731256317}
   box: {fileID: 311799937618319845}
   MainRenderer: {fileID: 8277276840468362465}
-  backRenderer: {fileID: 9124622230576907534}
-  backTextureResource: CA_MainImages/CardbackEndfieldDark
   NameText: {fileID: 7633322607678442224}
   HPText: {fileID: 8874724845833062374}
   ATKText: {fileID: 5902721239258378469}

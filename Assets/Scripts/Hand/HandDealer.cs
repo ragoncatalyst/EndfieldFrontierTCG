@@ -19,7 +19,6 @@ namespace EndfieldFrontierTCG.Hand
         [Tooltip("新发出的卡牌统一缩放。1 为预制体原始大小。")]
         public float defaultCardScale = 1.0f;
         [Tooltip("将手牌区域定位到主相机前方的距离（米），用于初始居中")] public float handDistanceFromCamera = 3.0f;
-        [Tooltip("手牌区域在世界 Y 高度")] public float handZoneY = 0.6f;
 
         private HandSplineZone _activeZone;
         private float _lastSpacing;
@@ -57,7 +56,8 @@ namespace EndfieldFrontierTCG.Hand
                 if (cam != null)
                 {
                     Vector3 basePos = cam.transform.position + cam.transform.forward * handDistanceFromCamera;
-                    basePos.y = handZoneY;
+                    float inspectorY = _activeZone.transform.position.y;
+                    basePos.y = inspectorY;
                     _activeZone.transform.position = basePos;
                     // 让手牌区域的朝向与相机水平一致，便于展开在屏幕左右
                     var e = _activeZone.transform.eulerAngles; e.y = cam.transform.eulerAngles.y; e.x = 0f; e.z = 0f;
@@ -193,5 +193,4 @@ namespace EndfieldFrontierTCG.Hand
         }
     }
 }
-
 

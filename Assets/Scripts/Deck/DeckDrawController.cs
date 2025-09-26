@@ -153,7 +153,8 @@ namespace EndfieldFrontierTCG.Deck
                 }
 
                 cardObj.transform.SetParent(null, true);
-                Quaternion overflowTiltRot = spawnRot * Quaternion.AngleAxis(180f - 22f, Vector3.up);
+                Vector3 overflowAxis = (spawnRot * Vector3.up).normalized;
+                Quaternion overflowTiltRot = Quaternion.AngleAxis(180f - 22f, overflowAxis) * spawnRot;
                 cardObj.transform.rotation = overflowTiltRot;
                 view.PlayEventSequence(overflowEventZone);
             }
@@ -170,18 +171,17 @@ namespace EndfieldFrontierTCG.Deck
         {
             if (card == null) yield break;
 
-            const float initialTiltDeg = 22f;
-            Quaternion spawnTiltRot = spawnRot * Quaternion.AngleAxis(180f - initialTiltDeg, Vector3.up);
-            card.transform.rotation = spawnTiltRot;
-
             yield return null; // wait registration to settle
 
             Vector3 homePos;
             Quaternion homeRot;
             handZone.ApplyTwoPhaseHome(card, out homePos, out homeRot);
 
+            const float initialTiltDeg = 22f;
             Quaternion baseRot = homeRot;
-            Quaternion flipStartRot = spawnTiltRot;
+            Vector3 localYAxis = (baseRot * Vector3.up).normalized;
+            Quaternion flipStartRot = Quaternion.AngleAxis(180f - initialTiltDeg, localYAxis) * baseRot;
+            card.transform.rotation = flipStartRot;
 
             float phase1 = Mathf.Max(0.01f, handZone.returnPhase1);
             float phase2 = Mathf.Max(0.01f, handZone.returnPhase2);
