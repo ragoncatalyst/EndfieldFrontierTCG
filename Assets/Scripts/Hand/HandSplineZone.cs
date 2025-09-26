@@ -648,6 +648,8 @@ namespace EndfieldFrontierTCG.Hand
 			float durZR = Mathf.Clamp(hoverZLerp, 0.01f, 1f);
 			float durZL = Mathf.Clamp(hoverZLeftLerp, 0.01f, 1f);
 			float px = 0f, py = 0f, pzR = 0f, pzL = 0f;
+			float desiredPx = 0f, desiredPy = 0f, desiredPzR = 0f, desiredPzL = 0f;
+			int lastHoverIndex = -1;
 			var vels = new System.Collections.Generic.Dictionary<CardView3D, Vector3>(_cards.Length);
 			while (true)
 			{
@@ -655,18 +657,34 @@ namespace EndfieldFrontierTCG.Hand
 				durY = Mathf.Clamp(hoverXLerp, 0.01f, 1f);
 				durZR = Mathf.Clamp(hoverZLerp, 0.01f, 1f);
 				durZL = Mathf.Clamp(hoverZLeftLerp, 0.01f, 1f);
-				float tActive = (_hoverIndex >= 0) ? 1f : 0f;
-				px = Mathf.MoveTowards(px, tActive, Time.deltaTime / durX);
-				py = Mathf.MoveTowards(py, tActive, Time.deltaTime / durY);
-				pzR = Mathf.MoveTowards(pzR, tActive, Time.deltaTime / durZR);
-				pzL = Mathf.MoveTowards(pzL, tActive, Time.deltaTime / durZL);
+				bool hoverChangedThisFrame = (_hoverIndex != lastHoverIndex);
+				desiredPx = (_hoverIndex >= 0) ? 1f : 0f;
+				desiredPy = desiredPx;
+				desiredPzR = desiredPx;
+				desiredPzL = desiredPx;
+				if (hoverChangedThisFrame)
+				{
+					px = desiredPx;
+					py = desiredPy;
+					pzR = desiredPzR;
+					pzL = desiredPzL;
+					lastHoverIndex = _hoverIndex;
+				}
+				else
+				{
+					px = Mathf.MoveTowards(px, desiredPx, Time.deltaTime / durX);
+					py = Mathf.MoveTowards(py, desiredPy, Time.deltaTime / durY);
+					pzR = Mathf.MoveTowards(pzR, desiredPzR, Time.deltaTime / durZR);
+					pzL = Mathf.MoveTowards(pzL, desiredPzL, Time.deltaTime / durZL);
+				}
 
 				Vector3 dirW = transform.TransformDirection(lineLocalDirection);
 				Vector3 lineXZ = new Vector3(dirW.x, 0f, dirW.z);
 				if (lineXZ.sqrMagnitude < 1e-6f) lineXZ = Vector3.right;
 				lineXZ.Normalize();
-				Vector3 liftDir = new Vector3(-lineXZ.z, 0f, lineXZ.x);
+				Vector3 liftDir = Vector3.forward; // 保证 hover 卡牌只沿世界 Z+ 方向运动
 
+			if (hoverChangedThisFrame) vels.Clear();
 			for (int i = 0; i < _cards.Length; i++)
 			{
 				var c = _cards[i]; if (c == null) continue;
@@ -690,7 +708,8 @@ namespace EndfieldFrontierTCG.Hand
 				{
 					TryGetSlotPose(approxSlot, out p, out r);
 				}
-				Vector3 target = p; Quaternion rot = r;
+				Vector3 baseTarget = p;
+				Vector3 target = baseTarget; Quaternion rot = r;
 					// 并拢排序：当有卡被拖出时，其余卡被重新连续编号到中心附近的槽位
 					if (_compactOnDrag && (_draggingCard == null || c != _draggingCard))
 					{
@@ -735,7 +754,11 @@ namespace EndfieldFrontierTCG.Hand
                             }
                         }
                         if (i == _hoverIndex)
-                            target += liftDir * (hoverX * mappedPY);
+                        {
+                            Vector3 lifted = baseTarget + liftDir * (hoverX * mappedPY);
+                            lifted.x = baseTarget.x; // hover 仅允许向上（Z+）移动，保持左右位置不变
+                            target = lifted;
+                        }
                     }
 					if (!vels.TryGetValue(c, out var vel)) vel = Vector3.zero;
 					Vector3 smoothed = Vector3.SmoothDamp(c.transform.position, target, ref vel, 0.06f);
