@@ -1389,9 +1389,12 @@ public class CardView3D : MonoBehaviour
             zone.GetPlacementForCard(this, out Vector3 landingPos, out Quaternion landingRot, out Vector3 exitPos);
             landingRot = AlignToTableRotation(landingRot);
 
+            const float flipStartProgress = 0.2f;
+            const float flipCompletionProgress = 0.7f;
+            const float initialTiltDeg = 22f;
+
             Vector3 startPos = transform.position;
-            Quaternion startRot = AlignToTableRotation(transform.rotation);
-            transform.rotation = startRot;
+            transform.rotation = AlignToTableRotation(transform.rotation);
 
             Vector3 displayPos = landingPos;
             Quaternion displayRot = landingRot;
@@ -1401,8 +1404,12 @@ public class CardView3D : MonoBehaviour
                 displayRot = AlignToTableRotation(dispRot);
             }
 
+            Quaternion flipStartRot = Quaternion.AngleAxis(180f - initialTiltDeg, Vector3.up) * displayRot;
+
             Vector3 travelStartPos = startPos;
-            Quaternion travelStartRot = startRot;
+            Quaternion travelStartRot = flipStartRot;
+            transform.rotation = flipStartRot;
+            float pathLength = Vector3.Distance(displayPos, travelStartPos);
             displayPos = new Vector3(displayPos.x, startPos.y, displayPos.z);
 
             float displayMoveDur = Mathf.Max(0.01f, zone.displayMoveDuration);
@@ -1415,7 +1422,15 @@ public class CardView3D : MonoBehaviour
                 float a = Mathf.Clamp01(t / displayMoveDur);
                 float w = displayCurve.Evaluate(a);
                 transform.position = Vector3.LerpUnclamped(travelStartPos, displayPos, w);
-                transform.rotation = Quaternion.Slerp(travelStartRot, displayRot, w);
+                float travelled = Vector3.Distance(transform.position, travelStartPos);
+                float progress = pathLength > 1e-4f ? Mathf.Clamp01(travelled / pathLength) : Mathf.Clamp01(w);
+                float flipDenom = Mathf.Max(0.01f, flipCompletionProgress - flipStartProgress);
+                float flipFactor = 0f;
+                if (progress > flipStartProgress)
+                {
+                    flipFactor = Mathf.Clamp01((progress - flipStartProgress) / flipDenom);
+                }
+                transform.rotation = Quaternion.Slerp(travelStartRot, displayRot, flipFactor);
                 yield return null;
             }
             transform.position = displayPos;

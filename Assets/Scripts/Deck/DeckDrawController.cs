@@ -17,6 +17,7 @@ namespace EndfieldFrontierTCG.Deck
         [SerializeField] private Transform deckInitialOrientation;
         [SerializeField] private EventPlayZone overflowEventZone;
         [SerializeField] private int maxHandCards = 10;
+        [SerializeField] private DeckPileVisualizer pileVisualizer;
 
         [Header("Deck Definition")]
         [SerializeField] private List<DeckEntry> starterDeck = new List<DeckEntry>();
@@ -27,6 +28,7 @@ namespace EndfieldFrontierTCG.Deck
         private void Awake()
         {
             BuildDeckQueue();
+            UpdatePileVisual();
         }
 
         private void BuildDeckQueue()
@@ -37,6 +39,7 @@ namespace EndfieldFrontierTCG.Deck
             {
                 Debug.LogWarning("DeckDrawController: starterDeck is empty.");
                 _deckQueue = new Queue<int>();
+                UpdatePileVisual();
                 return;
             }
 
@@ -51,11 +54,13 @@ namespace EndfieldFrontierTCG.Deck
             if (deckList.Entries.Count == 0)
             {
                 _deckQueue = new Queue<int>();
+                UpdatePileVisual();
                 return;
             }
 
             var order = DeckShuffler.ShuffleWithBuckets(deckList, shuffleSeed);
             _deckQueue = new Queue<int>(order);
+            UpdatePileVisual();
         }
 
         public void ShuffleRemaining()
@@ -72,6 +77,7 @@ namespace EndfieldFrontierTCG.Deck
 
             var order = DeckShuffler.ShuffleWithBuckets(deckList, shuffleSeed + Time.frameCount);
             _deckQueue = new Queue<int>(order);
+            UpdatePileVisual();
         }
 
         public void DrawOne()
@@ -79,6 +85,7 @@ namespace EndfieldFrontierTCG.Deck
             if (_deckQueue == null || _deckQueue.Count == 0)
             {
                 Debug.LogWarning("DeckDrawController: deck is empty.");
+                UpdatePileVisual();
                 return;
             }
             if (typeManager == null || handZone == null || deckSpawnPoint == null)
@@ -88,6 +95,7 @@ namespace EndfieldFrontierTCG.Deck
             }
 
             int cardId = _deckQueue.Dequeue();
+            UpdatePileVisual();
             if (!CardDatabase.TryGet(cardId, out var data))
             {
                 Debug.LogWarning($"DeckDrawController: Card ID {cardId} not found in database.");
@@ -145,26 +153,35 @@ namespace EndfieldFrontierTCG.Deck
                 }
 
                 cardObj.transform.SetParent(null, true);
+                Quaternion overflowTiltRot = spawnRot * Quaternion.AngleAxis(180f - 22f, Vector3.up);
+                cardObj.transform.rotation = overflowTiltRot;
                 view.PlayEventSequence(overflowEventZone);
             }
+        }
+
+        private void UpdatePileVisual()
+        {
+            if (pileVisualizer == null) return;
+            int count = _deckQueue != null ? _deckQueue.Count : 0;
+            pileVisualizer.SetCount(count);
         }
 
         private System.Collections.IEnumerator ReturnWithFlip(CardView3D card, Quaternion spawnRot)
         {
             if (card == null) yield break;
 
+            const float initialTiltDeg = 22f;
+            Quaternion spawnTiltRot = spawnRot * Quaternion.AngleAxis(180f - initialTiltDeg, Vector3.up);
+            card.transform.rotation = spawnTiltRot;
+
             yield return null; // wait registration to settle
 
-            int targetSlot = card.slotIndex >= 0 ? card.slotIndex : Mathf.Max(0, handZone.slots - 1);
             Vector3 homePos;
             Quaternion homeRot;
             handZone.ApplyTwoPhaseHome(card, out homePos, out homeRot);
 
-            float homeYaw = homeRot.eulerAngles.y;
-            Quaternion baseRot = Quaternion.Euler(90f, homeYaw, 0f);
-
-            Quaternion flipStartRot = spawnRot * Quaternion.AngleAxis(180f, Vector3.up);
-            card.transform.rotation = flipStartRot;
+            Quaternion baseRot = homeRot;
+            Quaternion flipStartRot = spawnTiltRot;
 
             float phase1 = Mathf.Max(0.01f, handZone.returnPhase1);
             float phase2 = Mathf.Max(0.01f, handZone.returnPhase2);
@@ -178,7 +195,9 @@ namespace EndfieldFrontierTCG.Deck
             Vector3 aheadPos = homePos + forward * handZone.returnAheadZ;
             aheadPos.y = Mathf.Max(homePos.y, startPos.y);
 
-            float flipThreshold = 0.7f;
+            const float flipStartProgress = 0.2f;
+            float flipThreshold = Mathf.Max(flipStartProgress + 0.05f, 0.7f);
+            float pathLength = Vector3.Distance(aheadPos, startPos);
             float t = 0f;
             while (t < phase1)
             {
@@ -186,13 +205,22 @@ namespace EndfieldFrontierTCG.Deck
                 float u = Mathf.Clamp01(t / phase1);
                 float w = curve1 != null ? curve1.Evaluate(u) : u;
                 Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
-                float earlyFactor = Mathf.Clamp01(u / Mathf.Max(0.01f, flipThreshold));
+                float travelled = Vector3.Distance(pos, startPos);
+                float progress = pathLength > 1e-4f ? Mathf.Clamp01(travelled / pathLength) : Mathf.Clamp01(w);
+                float flipDenom = Mathf.Max(0.01f, flipThreshold - flipStartProgress);
+                float earlyFactor = 0f;
+                if (progress > flipStartProgress)
+                {
+                    earlyFactor = Mathf.Clamp01((progress - flipStartProgress) / flipDenom);
+                }
                 Quaternion rot = Quaternion.Slerp(flipStartRot, baseRot, earlyFactor);
                 card.transform.SetPositionAndRotation(pos, rot);
                 yield return null;
             }
 
             Vector3 phase2StartPos = card.transform.position;
+            phase2StartPos.y = homePos.y;
+            card.transform.position = new Vector3(card.transform.position.x, homePos.y, card.transform.position.z);
             Quaternion phase2StartRot = card.transform.rotation;
 
             t = 0f;
