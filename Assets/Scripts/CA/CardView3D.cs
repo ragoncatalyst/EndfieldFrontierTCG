@@ -36,7 +36,7 @@ public class CardView3D : MonoBehaviour
     [HideInInspector] public int cardId = -1;    // 绑定的数据ID
 
     [Header("Heights")]
-    public float dragPlaneY = 0.35f; // 降低拖动高度，避免太高
+    public float dragPlaneY = 0.07f; // 拖拽高度降到原本的20%，避免抬得过高
     public float groundY = 0f;
 
     [Header("Follow (Leaf)")]
@@ -171,6 +171,8 @@ public class CardView3D : MonoBehaviour
     private float _elevateY = 0f;
     [Tooltip("软碰撞修正的平滑时间（秒），越大越柔和")]
     public float collisionSmoothTime = 0.06f;
+    [Tooltip("单帧碰撞修正的最大位移（米），限制 ComputePenetration 导致的抖动幅度")]
+    public float collisionResolveMaxStep = 0.025f;
     private Vector3 _collisionAdjust = Vector3.zero;
     private Vector3 _collisionAdjustVel = Vector3.zero;
 
@@ -1052,6 +1054,7 @@ public class CardView3D : MonoBehaviour
         blocked = false;
         if (box == null) return target;
         Vector3 corrected = target;
+        float maxStep = Mathf.Max(0.001f, collisionResolveMaxStep);
         Vector3 halfExt = box.size * 0.5f * 1.02f;
         Quaternion rot = transform.rotation;
         for (int iter = 0; iter < 2; iter++)
@@ -1067,7 +1070,8 @@ public class CardView3D : MonoBehaviour
                     // 只允许 Y+ 分离（绝不沿 X/Z 顶开）
                     Vector3 prefer = new Vector3(0f, Mathf.Max(0f, dir.y), 0f);
                     if (prefer.sqrMagnitude < 1e-8f) prefer = Vector3.up; // 兜底：至少向上分离
-                    corrected += prefer.normalized * dist;
+                    float step = Mathf.Min(dist, maxStep);
+                    corrected += prefer.normalized * step;
                     any = true;
                     blocked = true;
                 }
@@ -1391,7 +1395,6 @@ public class CardView3D : MonoBehaviour
 
             const float flipStartProgress = 0.2f;
             const float flipCompletionProgress = 0.7f;
-            const float initialTiltDeg = 22f;
 
             Vector3 startPos = transform.position;
             transform.rotation = AlignToTableRotation(transform.rotation);
@@ -1404,8 +1407,7 @@ public class CardView3D : MonoBehaviour
                 displayRot = AlignToTableRotation(dispRot);
             }
 
-            Vector3 localYAxis = (displayRot * Vector3.up).normalized;
-            Quaternion flipStartRot = Quaternion.AngleAxis(180f - initialTiltDeg, localYAxis) * displayRot;
+            Quaternion flipStartRot = displayRot;
 
             Vector3 travelStartPos = startPos;
             Quaternion travelStartRot = flipStartRot;

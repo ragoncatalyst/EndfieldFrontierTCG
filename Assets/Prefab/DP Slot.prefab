@@ -68,7 +68,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   slotIndicator: {fileID: 7848233017229338267}
-  normalColor: {r: 0.754717, g: 0.754717, b: 0.754717, a: 0.3}
+  normalColor: {r: 0.754717, g: 0.754717, b: 0.754717, a: 0.09803922}
   highlightColor: {r: 1, g: 1, b: 0.495283, a: 0.5}
   invalidColor: {r: 1, g: 0.5896226, b: 0.5896226, a: 0.5}
   slotSize: {x: 0.7, y: 1}
