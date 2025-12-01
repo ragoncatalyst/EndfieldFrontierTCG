@@ -32,6 +32,8 @@ namespace EndfieldFrontierTCG.Hand
 		public bool stackDepthByIndex = true;
 		public float depthPerSlot = 0.01f;
 		public bool reverseDepthOrder = false;
+		[Tooltip("当手牌静止时，使用每槽位的垂直偏移来保持前后关系（米），而不是沿摄像机方向的 Z 偏移）")]
+		public float verticalDepthPerSlot = 0.002f;
 
 		[Header("Line Params")]
 		public float lineSpacing = 0.8f;
@@ -113,6 +115,21 @@ namespace EndfieldFrontierTCG.Hand
 
 		private CardView3D[] _cards = new CardView3D[0];
 		private int _hoverIndex = -1;
+		[Tooltip("Cooldown (seconds) to prevent rapid hover switching when pointer sits between overlapping cards")]
+		public float hoverChangeCooldown = 0.1f;
+		// last time the hover index was changed (unscaled time)
+		private float _lastHoverChangeTime = -999f;
+		// pending candidate for stabilization: when pointer moves between overlapping cards
+		[Tooltip("Required stable time (s) that a hover candidate must persist before it's committed")] public float hoverStableTime = 0.12f;
+		private int _pendingHoverIndex = -2; // sentinel: -2 = no pending
+		private float _pendingHoverStartTime = -999f;
+
+		[Header("Hover Pass Tuning")]
+		[Tooltip("If the pointer moves faster than this (pixels/sec), treat the pass as an intentional quick hover and commit immediately")] public float hoverImmediateSpeed = 1200f;
+		[Tooltip("Allow fast pointer passes to immediately trigger hover regardless of stable time")] public bool allowImmediateHoverOnFastPass = true;
+		// track mouse motion between frames (screen pixels)
+		private Vector2 _lastMousePos = Vector2.zero;
+		private float _lastMouseTime = -999f;
 		private bool _hoverFromBelow = false;
 		private Coroutine _hoverCo;
 		private int _paramsHash = 0;
@@ -188,6 +205,9 @@ namespace EndfieldFrontierTCG.Hand
 
 		private void LateUpdate()
 		{
+            // compute mouse speed sample for RequestHoverChange usage (use previous stored values)
+            // note: we update the stored values at the end of LateUpdate so RequestHoverChange sees the last-frame sample
+
 			// 自动将手牌栏放置到摄像机视野底部（与摄像机同 X）。
 			if (autoPlaceAtCameraBottom)
 			{
@@ -221,46 +241,24 @@ namespace EndfieldFrontierTCG.Hand
 			UpdateHoverUnified();
 			DriveDragByRay();
 
-			// 自主维持：若是“从下方进入”，在下边缘保护带内保持 hover，即使当前几何判断略离开
-			if (_hoverIndex >= 0 && _hoverFromBelow)
-			{
-				bool onTop = IsPointerOnTopOfCard(_hoverIndex);
-				bool inBand = false;
-				try { inBand = IsWithinFromBelowBand(_hoverIndex); } catch {}
-				if (!(onTop || inBand))
-				{
-					_hoverIndex = -1; _pseudoHover = false;
-				}
-			}
-			// 伪 hover：若光线没有命中但指针在卡牌碰撞箱正下方（世界 Z- 方向）且 X 在范围内，则将其视为 hover
-			if (_hoverIndex < 0)
-			{
-				int ph = FindPseudoHoverIndex();
-				if (ph >= 0)
-				{
-					_hoverIndex = ph; _pseudoHover = true; _hoverFromBelow = true;
-				}
-				else { _pseudoHover = false; }
-			}
-			else if (_pseudoHover)
-			{
-				if (!IsInPseudoArea(_hoverIndex) && !IsPointerOnTopOfCard(_hoverIndex))
-				{
-					_hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false;
-				}
-			}
+			// Enforce strict raycast-driven hover: clear any pseudo-hover flag
+			_pseudoHover = false;
 			// 拖拽时不允许 hover（被拖拽牌视为非 hover，其他牌也不触发 hover 动画）
-			if (_activeDragging) { _hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false; }
+			if (_activeDragging) { SetHoverIndexInternal(-1, false, false, true); }
 			// 兜底：若没有在按、没有拖，但仍然残留活动目标，则清理
 			if (!_pressing && !_activeDragging && _activePressed != null)
 			{
 				_activePressed = null;
 			}
+
+			// update mouse sample for next frame's speed calculation
+			_lastMousePos = Input.mousePosition;
+			_lastMouseTime = Time.unscaledTime;
 		}
 
 		private void UpdateHoverUnified()
 		{
-			if (_activeDragging) { _hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false; return; }
+			if (_activeDragging) { SetHoverIndexInternal(-1, false, false, true); return; }
 			var cam = Camera.main; if (cam == null) return;
 			int newIdx = -1; bool fromBelow = false; bool pseudo = false;
 			// 1) 物理射线命中顶层
@@ -268,43 +266,27 @@ namespace EndfieldFrontierTCG.Hand
 			var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
 			if (hits != null && hits.Length > 0)
 			{
-				CardView3D top = null; float topY = float.NegativeInfinity;
+				// Choose among all raycast hits the card whose world-top Y value is largest.
+				CardView3D top = null; float bestTopY = float.NegativeInfinity;
 				for (int i = 0; i < hits.Length; i++)
 				{
 					var cv = hits[i].collider != null ? hits[i].collider.GetComponentInParent<CardView3D>() : null;
 					if (cv == null || cv.IsReturningHome) continue;
-					float y = hits[i].collider.bounds.max.y;
-					if (y > topY) { topY = y; top = cv; }
+					float ty = GetCardWorldTopY(cv);
+					if (ty > bestTopY) { bestTopY = ty; top = cv; }
 				}
 				if (top != null) { newIdx = top.handIndex; fromBelow = IsPointerFromBelow(top); }
 			}
-			// 2) 伪 hover 区域（卡牌正下方）
-			if (newIdx < 0)
-			{
-				int ph = FindPseudoHoverIndex();
-				if (ph >= 0) { newIdx = ph; fromBelow = true; pseudo = true; }
-			}
-			// 3) 屏幕保护带（从下方进入）
-			if (newIdx < 0 && _cards != null)
-			{
-				for (int i = 0; i < _cards.Length; i++)
-				{
-					if (IsWithinFromBelowBand(i)) { newIdx = i; fromBelow = true; break; }
-				}
-			}
+			// Strict raycast: no pseudo hover or screen-band fallback; if there's no ray hit, newIdx stays -1
 			if (newIdx != _hoverIndex)
 			{
-				_pseudoHover = pseudo; _hoverFromBelow = fromBelow; _hoverIndex = newIdx;
-				if (_hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length && _cards[_hoverIndex] != null)
-				{
-					try { _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(_cards[_hoverIndex]); } catch {}
-				}
+				RequestHoverChange(newIdx, pseudo, fromBelow);
 			}
 			else if (_pseudoHover)
 			{
 				if (_hoverIndex >= 0 && !IsInPseudoArea(_hoverIndex) && !IsPointerOnTopOfCard(_hoverIndex))
 				{
-					_hoverIndex = -1; _pseudoHover = false; _hoverFromBelow = false;
+					RequestHoverChange(-1, false, false);
 				}
 			}
 		}
@@ -337,13 +319,14 @@ namespace EndfieldFrontierTCG.Hand
 			var cam = Camera.main; if (cam == null) return;
 			var ray = cam.ScreenPointToRay(Input.mousePosition);
 			var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
-			CardView3D top = null; float topY = float.NegativeInfinity;
+			// Choose among all raycast hits the card whose world-top Y value is largest.
+			CardView3D top = null; float bestTopY = float.NegativeInfinity;
 			for (int i = 0; i < hits.Length; i++)
 			{
 				var cv = hits[i].collider != null ? hits[i].collider.GetComponentInParent<CardView3D>() : null;
-				if (cv == null) continue;
-				float y = hits[i].collider.bounds.max.y;
-				if (y > topY) { topY = y; top = cv; }
+				if (cv == null || cv.IsReturningHome) continue;
+				float ty = GetCardWorldTopY(cv);
+				if (ty > bestTopY) { bestTopY = ty; top = cv; }
 			}
 			bool pointerOnAny = (top != null);
 
@@ -417,7 +400,7 @@ namespace EndfieldFrontierTCG.Hand
 		private void UpdateHoverByRay()
 		{
 			// 正在拖拽时彻底禁止 hover
-			if (_activeDragging) { _hoverIndex = -1; return; }
+			if (_activeDragging) { SetHoverIndexInternal(-1, false, false, true); return; }
 			var cam = Camera.main; if (cam == null) return;
 			// 若正在按住鼠标并已有 hover 目标，则锁定该目标（但不再在这里驱动拖拽）
 			if (Input.GetMouseButton(0) && _hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length)
@@ -428,40 +411,23 @@ namespace EndfieldFrontierTCG.Hand
 			var hits = Physics.RaycastAll(ray, 1000f, interactLayerMask, QueryTriggerInteraction.Collide);
 			if (hits == null || hits.Length == 0)
 			{
-				// 没有任何射线命中：允许“从下方首次进入”的屏幕带判定来启动 hover
-				int candidate = -1; float bestMinY = float.NegativeInfinity;
-				if (_cards != null)
-				{
-					for (int i = 0; i < _cards.Length; i++)
-					{
-						var c = _cards[i]; if (c == null) continue;
-						if (!IsWithinFromBelowBand(i)) continue;
-						// 选择屏幕下缘更靠上的那张（更接近指针）
-						if (TryGetCardScreenBounds(i, out _, out _, out float minYI, out _))
-						{
-							if (minYI > bestMinY) { bestMinY = minYI; candidate = i; }
-						}
-					}
-				}
-				if (candidate >= 0)
-				{
-					_hoverIndex = candidate; _hoverFromBelow = true;
-					try { _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(_cards[_hoverIndex]); } catch {}
-					return;
-				}
+				// Strict raycast: if nothing is hit, clear hover immediately
 				if (_hoverIndex != -1 && debugLogs) Debug.Log("[HandSplineZone] hoverIndex=-1 (no hits)");
-				_hoverIndex = -1; return;
+				SetHoverIndexInternal(-1, false, false, true);
+				return;
 			}
-			CardView3D top = null; float topY = float.NegativeInfinity;
+			// Choose among all raycast hits the card whose world-top Y value is largest.
+			CardView3D top = null; float bestTopY = float.NegativeInfinity;
 			for (int i = 0; i < hits.Length; i++)
 			{
 				var cv = hits[i].collider != null ? hits[i].collider.GetComponentInParent<CardView3D>() : null;
 				if (cv == null) continue;
-				float y = hits[i].collider.bounds.max.y;
-				if (y > topY) { topY = y; top = cv; }
+				float ty = GetCardWorldTopY(cv);
+				if (ty > bestTopY) { bestTopY = ty; top = cv; }
 			}
 			if (top == null) { if (_hoverIndex != -1 && debugLogs) Debug.Log("[HandSplineZone] hoverIndex=-1 (no top)"); return; }
-			if (top.IsReturningHome) { _hoverIndex = -1; return; }
+			if (top.IsReturningHome) { RequestHoverChange(-1, false, false); return; }
+			// Strict raycast: do not apply any visual-projection override here
 			int newIdx = top.handIndex;
 			if (newIdx != _hoverIndex)
 			{
@@ -470,15 +436,18 @@ namespace EndfieldFrontierTCG.Hand
 					string n = top != null ? top.name : "null";
 					Debug.Log($"[HandSplineZone] hoverIndex { _hoverIndex } -> { newIdx } ({ n })");
 				}
-				_hoverIndex = newIdx; // 仅在变化时赋值，减少抖动
-				// 记录从下方进入的基线与标志
+				bool fromBelow = false;
 				try
 				{
-					_hoverFromBelow = IsPointerFromBelow(top);
-					if (_hoverFromBelow)
-						_enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(top);
+					fromBelow = IsPointerFromBelow(top);
 				}
-				catch {}
+				catch { }
+				RequestHoverChange(newIdx, false, fromBelow);
+				try
+				{
+					if (fromBelow) _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(top);
+				}
+				catch { }
 			}
 		}
 
@@ -515,12 +484,10 @@ namespace EndfieldFrontierTCG.Hand
             }
             
             // 如果这张卡是当前悬停的卡，清除悬停状态
-            if (_hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length && _cards[_hoverIndex] == card)
-            {
-                _hoverIndex = -1;
-                _hoverFromBelow = false;
-                _pseudoHover = false;
-            }
+			if (_hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length && _cards[_hoverIndex] == card)
+			{
+				SetHoverIndexInternal(-1, false, false, true);
+			}
             
             // 如果这张卡是当前按下的卡，清除按下状态
             if (_activePressed == card)
@@ -565,20 +532,12 @@ namespace EndfieldFrontierTCG.Hand
 
 		public void ForceRelayoutExistingCards()
 		{
-			var list = GetComponentsInChildren<CardView3D>(true);
-			for (int i = 0; i < list.Length; i++)
-			{
-				int bestIdx = 0; float best = float.MaxValue;
-				for (int s = 0; s < slots; s++)
-				{
-					if (TryGetSlotPose(s, out var p, out _))
-					{
-						float d = Vector3.SqrMagnitude(list[i].transform.position - p);
-						if (d < best) { best = d; bestIdx = s; }
-					}
-				}
-				AssignCardToSlot(list[i], bestIdx);
-			}
+			// Rebuild the internal _cards array from child CardView3D components
+			var children = GetComponentsInChildren<CardView3D>(true) ?? new CardView3D[0];
+			_cards = children;
+			for (int i = 0; i < _cards.Length; i++) if (_cards[i] != null) _cards[i].handIndex = i;
+			// Recompute poses and optionally animate existing cards back into place
+			RealignCards(null, true);
 		}
 
 		public bool NotifyHover(CardView3D card, bool enter)
@@ -593,16 +552,16 @@ namespace EndfieldFrontierTCG.Hand
 
 			if (enter)
 			{
-				_hoverIndex = card.handIndex;
-				_hoverFromBelow = IsPointerFromBelow(card);
-				_enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(card);
+				// immediate when explicitly notified
+				SetHoverIndexInternal(card.handIndex, false, IsPointerFromBelow(card), true);
+				try { _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(card); } catch {}
 			}
 			else
 			{
 				// 若不是从下方进入，按常规退出；
 				// 若是从下方进入，交由 LateUpdate 的可视判定维持，不立即清空
 				if (!_hoverFromBelow && _hoverIndex == card.handIndex)
-					_hoverIndex = -1;
+					SetHoverIndexInternal(-1, false, false, true);
 			}
 			if (_hoverCo == null) _hoverCo = StartCoroutine(RepositionByHover());
 			return true;
@@ -633,10 +592,211 @@ namespace EndfieldFrontierTCG.Hand
 			return minY;
 		}
 
+		// Find the visually topmost card under the given screen position.
+		// We project each card's bounds into screen space and test containment of the pointer.
+		// Return the card whose bounds contain the pointer and whose camera-space depth is smallest (closest to camera).
+		private CardView3D FindTopCardUnderPointer(Camera cam, Vector2 screenPos)
+		{
+			if (cam == null || _cards == null || _cards.Length == 0) return null;
+			CardView3D best = null;
+			float bestZ = float.PositiveInfinity;
+			for (int i = 0; i < _cards.Length; i++)
+			{
+				var c = _cards[i]; if (c == null) continue;
+				if (c.IsReturningHome) continue;
+				// Skip dragging card
+				if (_activeDragging && _draggingCard != null && c == _draggingCard) continue;
+				// Use renderer bounds if available
+				Renderer r = c.MainRenderer != null ? c.MainRenderer : c.GetComponentInChildren<Renderer>(true);
+				if (r == null) continue;
+				var b = r.bounds;
+				// project 8 corners
+				Vector3[] corners = new Vector3[8]
+				{
+					new Vector3(b.center.x-b.extents.x, b.center.y-b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x-b.extents.x, b.center.y-b.extents.y, b.center.z+b.extents.z),
+					new Vector3(b.center.x-b.extents.x, b.center.y+b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x-b.extents.x, b.center.y+b.extents.y, b.center.z+b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y-b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y-b.extents.y, b.center.z+b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y+b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y+b.extents.y, b.center.z+b.extents.z)
+				};
+				float minX = float.PositiveInfinity, minY = float.PositiveInfinity, maxX = float.NegativeInfinity, maxY = float.NegativeInfinity;
+				for (int k = 0; k < 8; k++)
+				{
+					var sp = cam.WorldToScreenPoint(corners[k]);
+					minX = Mathf.Min(minX, sp.x); maxX = Mathf.Max(maxX, sp.x);
+					minY = Mathf.Min(minY, sp.y); maxY = Mathf.Max(maxY, sp.y);
+				}
+				if (screenPos.x >= minX && screenPos.x <= maxX && screenPos.y >= minY && screenPos.y <= maxY)
+				{
+					// compute camera-space depth at the pointer location (approx) and prefer the closest
+					float z = GetBoundsScreenZAtPosition(b, cam, screenPos);
+					if (z < bestZ)
+					{
+						bestZ = z; best = c;
+					}
+				}
+			}
+			return best;
+		}
+
+		// Try to set the hover index, enforcing a short cooldown to avoid rapid oscillation.
+		// If force==true, bypass cooldown (used for immediate clears such as entering drag).
+		private bool SetHoverIndexInternal(int newIdx, bool pseudo = false, bool fromBelow = false, bool force = false)
+		{
+			float now = Time.unscaledTime;
+			if (!force && newIdx != _hoverIndex && now - _lastHoverChangeTime < hoverChangeCooldown)
+			{
+				// ignore rapid changes
+				return false;
+			}
+
+			// Apply the hover change (update state, start reposition coroutine if needed)
+			int prev = _hoverIndex;
+			_hoverIndex = newIdx;
+			_pseudoHover = pseudo;
+			_hoverFromBelow = fromBelow;
+			_lastHoverChangeTime = now;
+
+			// record enter baseline for the newly hovered card
+			if (_hoverIndex >= 0 && _cards != null && _hoverIndex < _cards.Length)
+			{
+				try { _enterMinYByIndex[_hoverIndex] = GetCardScreenMinY(_cards[_hoverIndex]); } catch { }
+			}
+
+			// ensure the RepositionByHover coroutine is running to animate the change
+			if (_hoverCo == null) _hoverCo = StartCoroutine(RepositionByHover());
+			return true;
+		}
+
+		// Request a hover change but require the candidate to be stable for hoverStableTime
+		// to avoid rapid flipping when the pointer sits between overlapping cards.
+		private void RequestHoverChange(int newIdx, bool pseudo = false, bool fromBelow = false, bool force = false)
+		{
+			// compute instantaneous pointer speed since previous stored sample
+			float now = Time.unscaledTime;
+			Vector2 cur = Input.mousePosition;
+			float dt = now - _lastMouseTime;
+			float speed = 0f;
+			if (dt > 1e-6f) speed = Vector2.Distance(cur, _lastMousePos) / dt;
+
+			if (force)
+			{
+				// immediate
+				_pendingHoverIndex = -2;
+				_pendingHoverStartTime = -999f;
+				SetHoverIndexInternal(newIdx, pseudo, fromBelow, true);
+				return;
+			}
+			// if the pointer is moving fast and immediate-pass is allowed, commit immediately
+			if (allowImmediateHoverOnFastPass && newIdx != _hoverIndex && speed >= Mathf.Max(0f, hoverImmediateSpeed))
+			{
+				_pendingHoverIndex = -2;
+				_pendingHoverStartTime = -999f;
+				SetHoverIndexInternal(newIdx, pseudo, fromBelow, true);
+				return;
+			}
+			// if already hovered, clear pending
+			if (newIdx == _hoverIndex)
+			{
+				_pendingHoverIndex = -2;
+				_pendingHoverStartTime = -999f;
+				return;
+			}
+			// same candidate continues -> commit if stable long enough
+			if (newIdx == _pendingHoverIndex)
+			{
+				if (now - _pendingHoverStartTime >= Mathf.Max(0f, hoverStableTime))
+				{
+					_pendingHoverIndex = -2;
+					_pendingHoverStartTime = -999f;
+					// force to bypass SetHoverIndexInternal's cooldown here
+					SetHoverIndexInternal(newIdx, pseudo, fromBelow, true);
+				}
+				return;
+			}
+			// new pending candidate
+			_pendingHoverIndex = newIdx;
+			_pendingHoverStartTime = now;
+		}
+
+			// Return the minimal camera-space screen Z among the 8 corners of the bounds.
+			// If a corner projects behind the camera (z<=0), we use distance to camera as a fallback.
+			private float GetBoundsMinScreenZ(Bounds b, Camera cam)
+			{
+				float minZ = float.PositiveInfinity;
+				Vector3[] corners = new Vector3[8]
+				{
+					new Vector3(b.center.x-b.extents.x, b.center.y-b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x-b.extents.x, b.center.y-b.extents.y, b.center.z+b.extents.z),
+					new Vector3(b.center.x-b.extents.x, b.center.y+b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x-b.extents.x, b.center.y+b.extents.y, b.center.z+b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y-b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y-b.extents.y, b.center.z+b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y+b.extents.y, b.center.z-b.extents.z),
+					new Vector3(b.center.x+b.extents.x, b.center.y+b.extents.y, b.center.z+b.extents.z)
+				};
+				for (int k = 0; k < 8; k++)
+				{
+					var sp = cam.WorldToScreenPoint(corners[k]);
+					if (sp.z > 0f) minZ = Mathf.Min(minZ, sp.z);
+					else minZ = Mathf.Min(minZ, Vector3.Distance(cam.transform.position, corners[k]));
+				}
+				return minZ;
+			}
+
 		private bool IsPointerFromBelow(CardView3D card)
 		{
 			float minY = GetCardScreenMinY(card);
 			return Input.mousePosition.y <= (minY + enterFromBelowSlackPx);
+		}
+
+		// Estimate the camera-space screen Z at the given screen position by projecting the bounds' corners
+		// and choosing the corner whose projected XY is closest to screenPos. This is a cheap proxy for
+		// the depth at the pointer location and is more robust than taking the minimal corner Z alone.
+		private float GetBoundsScreenZAtPosition(Bounds b, Camera cam, Vector2 screenPos)
+		{
+			float bestDistSq = float.PositiveInfinity;
+			float bestZ = float.PositiveInfinity;
+			Vector3[] corners = new Vector3[8]
+			{
+				new Vector3(b.center.x-b.extents.x, b.center.y-b.extents.y, b.center.z-b.extents.z),
+				new Vector3(b.center.x-b.extents.x, b.center.y-b.extents.y, b.center.z+b.extents.z),
+				new Vector3(b.center.x-b.extents.x, b.center.y+b.extents.y, b.center.z-b.extents.z),
+				new Vector3(b.center.x-b.extents.x, b.center.y+b.extents.y, b.center.z+b.extents.z),
+				new Vector3(b.center.x+b.extents.x, b.center.y-b.extents.y, b.center.z-b.extents.z),
+				new Vector3(b.center.x+b.extents.x, b.center.y-b.extents.y, b.center.z+b.extents.z),
+				new Vector3(b.center.x+b.extents.x, b.center.y+b.extents.y, b.center.z-b.extents.z),
+				new Vector3(b.center.x+b.extents.x, b.center.y+b.extents.y, b.center.z+b.extents.z)
+			};
+			for (int k = 0; k < 8; k++)
+			{
+				var sp = cam.WorldToScreenPoint(corners[k]);
+				float dx = sp.x - screenPos.x; float dy = sp.y - screenPos.y;
+				float d2 = dx*dx + dy*dy;
+				if (d2 < bestDistSq)
+				{
+					bestDistSq = d2;
+					if (sp.z > 0f) bestZ = sp.z; else bestZ = Mathf.Min(bestZ, Vector3.Distance(cam.transform.position, corners[k]));
+				}
+			}
+			return bestZ;
+		}
+
+		// Return the top-most world Y for a card for tie-breaking among raycast hits.
+		// Prefer renderer.bounds.max.y when possible, otherwise fall back to transform.position.y.
+		private float GetCardWorldTopY(CardView3D c)
+		{
+			if (c == null) return float.NegativeInfinity;
+			try
+			{
+				Renderer r = c.MainRenderer != null ? c.MainRenderer : c.GetComponentInChildren<Renderer>(true);
+				if (r != null) return r.bounds.max.y;
+			}
+			catch {}
+			return c.transform.position.y;
 		}
 
 
@@ -722,9 +882,21 @@ namespace EndfieldFrontierTCG.Hand
 					}
 					if (_hoverIndex >= 0)
                     {
-                        int hoveredSlot = (_cards[_hoverIndex].slotIndex >= 0) ? _cards[_hoverIndex].slotIndex : _hoverIndex;
-                        bool isLeft = approxSlot < hoveredSlot;
-                        bool isRight = approxSlot > hoveredSlot;
+								// Use array index relative to the hovered card when available. This is more reliable
+								// for deciding which neighbor should slide aside (left/right) because _cards is
+								// maintained in hand-order and 'i' is the current card's hand index.
+								bool isLeft = false, isRight = false;
+								if (_hoverIndex >= 0 && _hoverIndex < _cards.Length)
+								{
+									isLeft = (i < _hoverIndex);
+									isRight = (i > _hoverIndex);
+								}
+								else
+								{
+									int hoveredSlot = (_cards[_hoverIndex].slotIndex >= 0) ? _cards[_hoverIndex].slotIndex : _hoverIndex;
+									isLeft = approxSlot < hoveredSlot;
+									isRight = approxSlot > hoveredSlot;
+								}
                         // 把原本的线性/MoveTowards 数值通过 Inspector 曲线映射为最终 local factor（0..1）
                         float mappedPX = (hoverCardMoveCurve != null && otherCardsMoveCurve != null) ? 
                             ((i == _hoverIndex) ? hoverCardMoveCurve.Evaluate(px) : otherCardsMoveCurve.Evaluate(px)) : px;
@@ -795,10 +967,25 @@ namespace EndfieldFrontierTCG.Hand
 			Vector3 baseEuler = useFixedCardEuler ? fixedCardEuler : new Vector3(90f, 0f, 0f);
 			rot = Quaternion.Euler(baseEuler.x, baseEuler.y + yaw + yawAdjustDeg + lineYawOffsetDeg, baseEuler.z);
 			pos = pWorld + Vector3.up * (offsetUp + shadowLiftY) + fwdXZ * offsetForward;
+			// By default, when the hand is in a static arrangement (no hover and not actively dragging),
+			// keep all cards at the same Z so they visually sit on the same plane. When hovering or
+			// dragging, honor the depth stacking so hovered/affected cards can be rendered slightly
+			// in front/back by slot order.
 			if (stackDepthByIndex && Camera.main != null && slots > 0)
 			{
+				bool applyDepth = false;
+				try { applyDepth = (_hoverIndex >= 0) || _activeDragging; } catch { applyDepth = false; }
 				int order = reverseDepthOrder ? (slots - 1 - index) : index;
-				pos += -Camera.main.transform.forward * (order * depthPerSlot);
+				if (applyDepth)
+				{
+					// interactive: use camera-forward Z stacking so hovered/dragged cards can pop forward
+					pos += -Camera.main.transform.forward * (order * depthPerSlot);
+				}
+				else
+				{
+					// idle: keep Z identical but stagger slightly in Y so render order and occlusion remain consistent
+					pos += Vector3.up * (order * verticalDepthPerSlot);
+				}
 			}
 			return true;
 		}

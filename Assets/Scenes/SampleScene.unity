@@ -1004,13 +1004,13 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 963194225}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.7071068, y: 0, z: 0, w: 0.7071068}
-  m_LocalPosition: {x: 15, y: 7.5, z: -15}
+  m_LocalRotation: {x: 0.53729963, y: 0, z: 0, w: 0.8433915}
+  m_LocalPosition: {x: 15, y: 7.5, z: -18.49}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 90, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 65, y: 0, z: 0}
 --- !u!114 &963194229
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1273,17 +1273,17 @@ MonoBehaviour:
   maxHandCards: 9
   pileVisualizer: {fileID: 0}
   starterDeck:
-  - CA_ID: 1
-    Count: 2
-  - CA_ID: 2
-    Count: 2
-  - CA_ID: 3
-    Count: 2
-  - CA_ID: 4
+  - CA_ID: 5
     Count: 2
   - CA_ID: 14
     Count: 2
-  - CA_ID: 5
+  - CA_ID: 1
+    Count: 2
+  - CA_ID: 3
+    Count: 2
+  - CA_ID: 2
+    Count: 2
+  - CA_ID: 4
     Count: 2
   - CA_ID: 6
     Count: 2
@@ -1291,7 +1291,7 @@ MonoBehaviour:
     Count: 2
   - CA_ID: 8
     Count: 2
-  shuffleSeed: 12345
+  shuffleSeed: 1111
 --- !u!65 &1343554431
 BoxCollider:
   m_ObjectHideFlags: 0
@@ -2216,9 +2216,9 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  returnAheadZ: 1
+  returnAheadZ: 1.5
   returnPhase1: 0.7
-  returnPhase2: 0.45
+  returnPhase2: 0.5
   debugLogs: 1
   handZoneRevision: rev_2025-09-03_01
   interactLayerMask:

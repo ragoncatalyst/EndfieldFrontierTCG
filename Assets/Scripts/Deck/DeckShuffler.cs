@@ -88,20 +88,27 @@ namespace EndfieldFrontierTCG.Deck
 
             // Early, mid, late phases: interleave low/mid/high with weights
             var final = new List<int>();
-            void ShuffleInPlace(List<int> list)
+
+            // Helper: shuffle a list using a provided RNG
+            void ShuffleInPlaceWithRng(List<int> list, Random r)
             {
                 for (int i = list.Count - 1; i > 0; i--)
                 {
-                    int j = rng.Next(i + 1);
+                    int j = r.Next(i + 1);
                     (list[i], list[j]) = (list[j], list[i]);
                 }
             }
 
-            ShuffleInPlace(buckets[CostBucket.Low]);
-            ShuffleInPlace(buckets[CostBucket.Mid]);
-            ShuffleInPlace(buckets[CostBucket.High]);
+            // Perform a couple of passes with derived seeds to increase sensitivity to seed changes
+            ShuffleInPlaceWithRng(buckets[CostBucket.Low], new Random(seed ^ unchecked((int)0x9E3779B9)));
+            ShuffleInPlaceWithRng(buckets[CostBucket.Low], new Random(seed));
 
-            // Simple heuristic: first third draw from Low mostly, then Mid, then High
+            ShuffleInPlaceWithRng(buckets[CostBucket.Mid], new Random(seed ^ unchecked((int)0xC13FA9A9)));
+            ShuffleInPlaceWithRng(buckets[CostBucket.Mid], new Random(seed));
+
+            ShuffleInPlaceWithRng(buckets[CostBucket.High], new Random(seed ^ unchecked((int)0x7F4A7C15)));
+            ShuffleInPlaceWithRng(buckets[CostBucket.High], new Random(seed));
+
             int total = buckets[CostBucket.Low].Count + buckets[CostBucket.Mid].Count + buckets[CostBucket.High].Count;
             for (int index = 0; index < total; index++)
             {
@@ -111,18 +118,24 @@ namespace EndfieldFrontierTCG.Deck
                 else if (phase < 0.66f) pref = new List<CostBucket> { CostBucket.Mid, CostBucket.Low, CostBucket.High };
                 else pref = new List<CostBucket> { CostBucket.High, CostBucket.Mid, CostBucket.Low };
 
-                int picked = -1;
-                foreach (var b in pref)
+                // Choose among available preferred buckets using RNG so seed changes produce different interleavings.
+                var available = pref.Where(b => buckets[b].Count > 0).ToList();
+                if (available.Count == 0)
                 {
-                    var list = buckets[b];
-                    if (list.Count > 0)
-                    {
-                        picked = list[list.Count - 1];
-                        list.RemoveAt(list.Count - 1);
-                        break;
-                    }
+                    // fallback: find any non-empty bucket
+                    available = new List<CostBucket>();
+                    foreach (var b in (CostBucket[])Enum.GetValues(typeof(CostBucket)))
+                        if (buckets[b].Count > 0) available.Add(b);
+                    if (available.Count == 0) break;
                 }
-                if (picked != -1) final.Add(picked);
+
+                int pickBucketIndex = rng.Next(available.Count);
+                var pickBucket = available[pickBucketIndex];
+                var listRef = buckets[pickBucket];
+                int pickIndex = rng.Next(listRef.Count);
+                int picked = listRef[pickIndex];
+                listRef.RemoveAt(pickIndex);
+                final.Add(picked);
             }
 
             return final;

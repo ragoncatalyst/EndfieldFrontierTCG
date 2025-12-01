@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -10,23 +11,39 @@ namespace EndfieldFrontierTCG.Deck
 {
     public class DeckDrawController : MonoBehaviour
     {
-        [Header("References")]
-        [SerializeField] private CA_TypeManager typeManager;
-        [SerializeField] private HandSplineZone handZone;
-        [SerializeField] private Transform deckSpawnPoint;
-        [SerializeField] private Transform deckInitialOrientation;
+    [Header("References")]
+    [SerializeField] private CA_TypeManager typeManager;
+    [SerializeField] private HandSplineZone handZone;
+    [SerializeField] private Transform deckSpawnPoint;
+    [SerializeField] private Transform deckInitialOrientation;
         [SerializeField] private EventPlayZone overflowEventZone;
         [SerializeField] private int maxHandCards = 10;
         [SerializeField] private DeckPileVisualizer pileVisualizer;
 
-        [Header("Deck Definition")]
-        [SerializeField] private List<DeckEntry> starterDeck = new List<DeckEntry>();
-        [SerializeField] private int shuffleSeed = 12345;
+    [Header("Deck Definition")]
+    [SerializeField] private List<DeckEntry> starterDeck = new List<DeckEntry>();
+    // If 0, a random seed will be generated at runtime (per run).
+    [SerializeField] private int shuffleSeed = 0;
 
         private Queue<int> _deckQueue;
 
         private void Awake()
         {
+            // If seed left as 0 in inspector, pick a fresh random seed per run so different play sessions differ.
+            if (shuffleSeed == 0)
+            {
+                try
+                {
+                    // Use Guid to get a high-entropy int seed
+                    shuffleSeed = Guid.NewGuid().GetHashCode();
+                }
+                catch
+                {
+                    shuffleSeed = System.Environment.TickCount;
+                }
+                Debug.Log($"DeckDrawController: generated runtime shuffleSeed={shuffleSeed}");
+            }
+
             BuildDeckQueue();
             UpdatePileVisual();
         }
@@ -170,6 +187,17 @@ namespace EndfieldFrontierTCG.Deck
         private System.Collections.IEnumerator ReturnWithFlip(CardView3D card, Quaternion spawnRot)
         {
             if (card == null) yield break;
+            // Mark the card as 'returning' so other systems (HandSplineZone / CardView3D) won't
+            // concurrently write its transform and cause jitter. We use reflection because
+            // CardView3D.IsReturningHome has a private setter.
+            System.Reflection.PropertyInfo isReturningProp = null;
+            try
+            {
+                isReturningProp = card.GetType().GetProperty("IsReturningHome", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                var setter = isReturningProp?.GetSetMethod(true);
+                setter?.Invoke(card, new object[] { true });
+            }
+            catch { }
 
             yield return null; // wait registration to settle
 
@@ -236,6 +264,14 @@ namespace EndfieldFrontierTCG.Deck
             }
 
             card.transform.SetPositionAndRotation(homePos, baseRot);
+
+            // Clear the returning flag so other systems resume control
+            try
+            {
+                var setter2 = isReturningProp?.GetSetMethod(true);
+                setter2?.Invoke(card, new object[] { false });
+            }
+            catch { }
         }
     }
 }
