@@ -107,6 +107,8 @@ namespace EndfieldFrontierTCG.Hand
         public float returnPhase1 = 0.15f;
         [Tooltip("第二阶段持续时间（秒）")]
         public float returnPhase2 = 0.18f;
+	[Tooltip("归位时：当有卡插回手牌，临时把左侧邻卡抬高、右侧邻卡降低的 Y 偏移（米）。仅作用于动画目标，不修改逻辑插槽位置。）")]
+	public float returnNeighborYOffset = 0.02f;
 
 		[Header("Debug")] public bool debugLogs = false;
 		[Header("Build")]
@@ -159,7 +161,7 @@ namespace EndfieldFrontierTCG.Hand
 		private int _reservedGapInsertIndex = -1;
 		private readonly Dictionary<CardView3D, Coroutine> _repositionCos = new Dictionary<CardView3D, Coroutine>();
 
-        private Coroutine _returnCo = null;
+		private Coroutine _returnCo = null;
 
 		private void BuildCompactMapping()
 		{
@@ -1100,6 +1102,13 @@ namespace EndfieldFrontierTCG.Hand
 		public void RealignCards(CardView3D newlyAdded = null, bool repositionExisting = true)
 		{
 			if (_cards == null || _cards.Length == 0) return;
+
+			// When a card is being inserted (newlyAdded != null) we may apply a small
+			// vertical offset to its immediate neighbors so the returning card can
+			// visually slot between an elevated left and lowered right neighbor.
+			// This offset only affects the temporary animation target Y and does not
+			// change logical slot indices.
+			float neighborReturnYOffset = this.returnNeighborYOffset;
 			var active = new List<CardView3D>();
 			for (int i = 0; i < _cards.Length; i++)
 			{
@@ -1115,26 +1124,64 @@ namespace EndfieldFrontierTCG.Hand
 
 			_targetUnits.Clear();
 			float startUnit = -((active.Count - 1) * 0.5f) * _baseSpacingUnits;
+			int newlyAddedIndex = -1;
+			if (newlyAdded != null) newlyAddedIndex = active.FindIndex(c => c == newlyAdded);
 			for (int i = 0; i < active.Count; i++)
 			{
 				var card = active[i];
 				float units = startUnit + i * _baseSpacingUnits;
 				EvaluatePoseForUnits(units, out Vector3 pos, out Quaternion rot, out int slotIndex);
 				card.slotIndex = slotIndex;
+				// Set the card's canonical home pose (do NOT include neighbor animation offsets here)
 				card.SetHomeFromZone(transform, pos, rot);
 				card.handIndex = i;
 				_targetUnits[card] = units;
 				try { card.transform.SetSiblingIndex(i); } catch {}
-				try { card.ApplyHandRenderOrder(i * _renderOrderStep); } catch {}
+				try
+				{
+					// Ensure the newly-added (inserted) card gets a temporary render-order boost
+					// so it won't be intermittently occluded during the insertion/phase1 animation.
+					// Do NOT use card.IsReturningHome here because that can remain true during
+					// phase2 and cause the card to occlude neighbors incorrectly. Only boost
+					// when RealignCards is called with a freshly inserted card reference.
+					bool isReturningVisual = (newlyAdded != null && card == newlyAdded);
+					int baseOrder = i * _renderOrderStep;
+					if (isReturningVisual)
+					{
+						int boost = Mathf.Max(_renderOrderStep * (active.Count), 1) + 100;
+						card.ApplyHandRenderOrder(baseOrder + boost);
+					}
+					else
+					{
+						card.ApplyHandRenderOrder(baseOrder);
+					}
+				} catch {}
 				if (!repositionExisting) continue;
 				if (card == newlyAdded) continue;
 				if (card == _draggingCard) continue;
 				if (card.IsReturningHome) continue;
-				AnimateCardToSlot(card, pos, rot, true);
+				// Compute animation target separately so we can apply a temporary Y offset to immediate neighbors
+				Vector3 animPos = pos;
+				if (newlyAddedIndex >= 0)
+				{
+					if (i == newlyAddedIndex - 1)
+					{
+						// left neighbor: raise up
+						animPos.y += neighborReturnYOffset;
+					}
+					else if (i == newlyAddedIndex + 1)
+					{
+						// right neighbor: push down
+						animPos.y -= neighborReturnYOffset;
+					}
+				}
+				AnimateCardToSlot(card, animPos, rot, true);
 			}
 			_cards = active.ToArray();
 
 		}
+
+        
 
 		public void ApplyTwoPhaseHome(CardView3D card, out Vector3 targetPos, out Quaternion targetRot)
 		{
@@ -1192,8 +1239,29 @@ namespace EndfieldFrontierTCG.Hand
 
 			_reservedGapCard = card;
 			_reservedGapSlot = originalSlot;
+			// If we couldn't locate the card in the current _cards array (e.g. the card
+			// hasn't been fully registered yet), map the original slot index to an
+			// insertion index by finding the first existing card whose slotIndex is
+			// greater-than-or-equal to originalSlot. This avoids clamping raw slot
+			// indices to the array length which would push the gap to the far right.
 			if (_reservedGapInsertIndex < 0)
-				_reservedGapInsertIndex = Mathf.Clamp(originalSlot, 0, Mathf.Max(0, _cards.Length));
+			{
+				int insertIdx = _cards.Length;
+				if (originalSlot >= 0)
+				{
+					for (int i = 0; i < _cards.Length; i++)
+					{
+						var c = _cards[i];
+						if (c == null) continue;
+						if (c.slotIndex >= originalSlot)
+						{
+							insertIdx = i;
+							break;
+						}
+					}
+				}
+				_reservedGapInsertIndex = Mathf.Clamp(insertIdx, 0, Mathf.Max(0, _cards.Length));
+			}
 
 			card.handIndex = -1;
 			card.slotIndex = originalSlot;
@@ -1231,7 +1299,13 @@ namespace EndfieldFrontierTCG.Hand
 			if (!list.Contains(card))
 			{
 				insertIndex = Mathf.Clamp(insertIndex, 0, list.Count);
-				list.Insert(insertIndex, card);
+				// If we are animating the return and there's a reserved gap for this card,
+				// defer the actual insertion until after phase1 so Y is already correct
+				// and sibling/render order will be correct when we insert.
+				if (!(animateReturning && _reservedGapCard == card && _reservedGapInsertIndex >= 0))
+				{
+					list.Insert(insertIndex, card);
+				}
 			}
 
 			_cards = list.ToArray();
@@ -1240,19 +1314,40 @@ namespace EndfieldFrontierTCG.Hand
 				if (_cards[i] != null) _cards[i].handIndex = i;
 			}
 
-			_reservedGapCard = null;
-			_reservedGapSlot = -1;
-			_reservedGapInsertIndex = -1;
-
-			if (animateReturning)
+			if (animateReturning && _reservedGapCard == card && _reservedGapInsertIndex >= 0)
 			{
+				// Insert the card immediately so sibling index / render order and neighbor
+				// animation targets happen during phase1. This ensures by the time
+				// phase1 ends, all layout and Y adjustments are completed.
+				insertIndex = Mathf.Clamp(_reservedGapInsertIndex, 0, list.Count);
+				if (!list.Contains(card)) list.Insert(insertIndex, card);
+				_cards = list.ToArray();
+				for (int i = 0; i < _cards.Length; i++) if (_cards[i] != null) _cards[i].handIndex = i;
+				// clear reserved state now that we've inserted
+				_reservedGapCard = null;
+				_reservedGapSlot = -1;
+				_reservedGapInsertIndex = -1;
+				// Realign and animate neighbors during phase1
 				RealignCards(card, true);
 				if (_returnCo != null) StopCoroutine(_returnCo);
-				_returnCo = StartCoroutine(SmoothMoveCardToHome(card, returnAheadZ, returnPhase1, returnPhase2));
+				_returnCo = StartCoroutine(SmoothMoveCardToHome(card, returnAheadZ, returnPhase1, returnPhase2, false));
 			}
 			else
 			{
-				RealignCards(null, true);
+				// commit insertion immediately
+				_reservedGapCard = null;
+				_reservedGapSlot = -1;
+				_reservedGapInsertIndex = -1;
+				if (animateReturning)
+				{
+					RealignCards(card, true);
+					if (_returnCo != null) StopCoroutine(_returnCo);
+					_returnCo = StartCoroutine(SmoothMoveCardToHome(card, returnAheadZ, returnPhase1, returnPhase2, false));
+				}
+				else
+				{
+					RealignCards(null, true);
+				}
 			}
 		}
 
@@ -1390,7 +1485,7 @@ namespace EndfieldFrontierTCG.Hand
 			TryGetSlotPose((slots > 0) ? (slots - 1) / 2 : 0, out targetPos, out targetRot);
 		}
 
-		private IEnumerator SmoothMoveCardToHome(CardView3D card, float aheadZ, float phase1Dur, float phase2Dur)
+		private IEnumerator SmoothMoveCardToHome(CardView3D card, float aheadZ, float phase1Dur, float phase2Dur, bool insertAfterPhase1 = false)
 		{
 			if (card == null) yield break;
 
@@ -1432,12 +1527,14 @@ namespace EndfieldFrontierTCG.Hand
                 Quaternion startRot = card.transform.rotation;
                 GetCardTargetPose(card, out Vector3 targetPos, out Quaternion targetRot);
 
-                Vector3 forwardDir = transform.forward;
-                if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
-                forwardDir.Normalize();
-                Vector3 aheadPos = targetPos + forwardDir * aheadZ;
-                float liftY = 0.04f;
-                aheadPos.y = Mathf.Max(aheadPos.y, startPos.y + liftY);
+				Vector3 forwardDir = transform.forward;
+				if (forwardDir.sqrMagnitude < 1e-6f) forwardDir = Vector3.forward;
+				forwardDir.Normalize();
+				// Ensure the ahead position reaches the target Y before phase 2 starts so
+				// vertical coordinate is already correct at the start of phase2.
+				Vector3 aheadPos = targetPos + forwardDir * aheadZ;
+				// Force aheadPos Y to be exactly the target Y so Y interpolation completes in phase1
+				aheadPos.y = targetPos.y;
 
                 System.Func<AnimationCurve, float, float> evalCurve = (curve, t) =>
                 {
@@ -1445,7 +1542,7 @@ namespace EndfieldFrontierTCG.Hand
                     return Mathf.Clamp01(curve.Evaluate(Mathf.Clamp01(t)));
                 };
 
-                if (phase1Dur > 1e-4f)
+				if (phase1Dur > 1e-4f)
                 {
                     float t = 0f;
                     while (t < phase1Dur)
@@ -1464,11 +1561,58 @@ namespace EndfieldFrontierTCG.Hand
                     card.transform.position = aheadPos;
                 }
 
-                Vector3 phase2StartPos = card.transform.position;
-                GetCardTargetPose(card, out targetPos, out targetRot);
-                phase2StartPos.y = targetPos.y;
-                card.transform.position = new Vector3(card.transform.position.x, targetPos.y, card.transform.position.z);
-                Quaternion phase2StartRot = card.transform.rotation;
+				// If requested, insert the card into the hand (so sibling order / render order
+				// are correct) before phase2 begins. This ensures the card's Y is already at
+				// the home Y when it's added to the hierarchy and avoids occlusion popping.
+				if (insertAfterPhase1)
+				{
+					try
+					{
+						// Build a list of existing cards (card should not be present)
+						var list = new List<CardView3D>();
+						if (_cards != null && _cards.Length > 0)
+						{
+							for (int i = 0; i < _cards.Length; i++) if (_cards[i] != null) list.Add(_cards[i]);
+						}
+
+						int insertIndex = list.Count;
+						if (_reservedGapCard == card && _reservedGapInsertIndex >= 0)
+						{
+							insertIndex = Mathf.Clamp(_reservedGapInsertIndex, 0, list.Count);
+						}
+						else if (_reservedGapSlot >= 0)
+						{
+							insertIndex = Mathf.Clamp(_reservedGapSlot, 0, list.Count);
+						}
+
+						// Insert the card and update indices
+						if (!list.Contains(card)) list.Insert(insertIndex, card);
+						_cards = list.ToArray();
+						for (int i = 0; i < _cards.Length; i++) if (_cards[i] != null) _cards[i].handIndex = i;
+
+						// Clear reserved gap state
+						_reservedGapCard = null;
+						_reservedGapSlot = -1;
+						_reservedGapInsertIndex = -1;
+
+						// Ensure render / sibling order is set, and let RealignCards animate others
+						try { card.transform.SetSiblingIndex(Mathf.Clamp(insertIndex, 0, Mathf.Max(0, (_cards?.Length ?? 0) - 1))); } catch {}
+						try { card.ApplyHandRenderOrder(insertIndex * _renderOrderStep); } catch {}
+						RealignCards(card, true);
+					}
+					catch { }
+				}
+
+				// Phase 2: smoothly move from current position (including Y) to the target pose.
+				// Previously Y was snapped to the target immediately; instead keep the current
+				// start position so Y will interpolate according to the return curve.
+				// preserve the originally computed target pose so phase2 follows the
+				// same XZ/rotation trajectory as planned at the start (inserting the
+				// card into the hierarchy must not change the phase2 path)
+				Vector3 phase2StartPos = card.transform.position;
+				Vector3 phase2TargetPos = targetPos;
+				Quaternion phase2TargetRot = targetRot;
+				Quaternion phase2StartRot = card.transform.rotation;
 
                 if (phase2Dur > 1e-4f)
                 {
@@ -1478,18 +1622,18 @@ namespace EndfieldFrontierTCG.Hand
                         t2 += Time.deltaTime;
                         float u = Mathf.Clamp01(t2 / phase2Dur);
                         float w = evalCurve(returnPhase2Curve, u);
-                        Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, targetPos, w);
-                        Quaternion rot = Quaternion.Slerp(phase2StartRot, targetRot, w);
+						Vector3 pos = Vector3.LerpUnclamped(phase2StartPos, phase2TargetPos, w);
+						Quaternion rot = Quaternion.Slerp(phase2StartRot, phase2TargetRot, w);
                         card.transform.SetPositionAndRotation(pos, rot);
                         yield return null;
                     }
                 }
-                else
-                {
-                    card.transform.position = targetPos;
-                }
+				else
+				{
+					card.transform.position = phase2TargetPos;
+				}
 
-				card.transform.SetPositionAndRotation(targetPos, targetRot);
+				card.transform.SetPositionAndRotation(phase2TargetPos, phase2TargetRot);
 				card.SetHomeFromZone(transform, targetPos, targetRot);
 			}
 			finally

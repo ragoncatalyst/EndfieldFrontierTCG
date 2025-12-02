@@ -1836,6 +1836,7 @@ MonoBehaviour:
   stackDepthByIndex: 1
   depthPerSlot: 0.01
   reverseDepthOrder: 0
+  verticalDepthPerSlot: 0.002
   lineSpacing: 0.3
   lineLocalDirection: {x: 1, y: 0, z: 0}
   lineLocalY: 0
@@ -2216,7 +2217,7 @@ MonoBehaviour:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
-  returnAheadZ: 1.5
+  returnAheadZ: 1
   returnPhase1: 0.7
   returnPhase2: 0.5
   debugLogs: 1
@@ -2224,6 +2225,10 @@ MonoBehaviour:
   interactLayerMask:
     serializedVersion: 2
     m_Bits: 4294967295
+  hoverChangeCooldown: 0.1
+  hoverStableTime: 0.12
+  hoverImmediateSpeed: 1200
+  allowImmediateHoverOnFastPass: 1
   _baseSpacingUnits: 1
   _renderOrderStep: 5
   coupleToTable: 0

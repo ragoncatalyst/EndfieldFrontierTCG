@@ -597,28 +597,21 @@ public class CardView3D : MonoBehaviour
             box.enabled = false;
         }
         IsReturningHome = true;
-        Vector3 startPos = transform.position;
-        Quaternion startRot = transform.rotation;
-        float homeY = _homePos.y;
-        // temp point just "above" home along +Z on XZ plane (world Z+)
-        Vector3 tempXZ = new Vector3(_homePos.x, homeY, _homePos.z + aheadZ);
+    Vector3 startPos = transform.position;
+    Quaternion startRot = transform.rotation;
+    float homeY = _homePos.y;
+    // temp point just "above" home along +Z on XZ plane (world Z+)
+    Vector3 tempXZ = new Vector3(_homePos.x, homeY, _homePos.z + aheadZ);
 
-        // 提升排序，避免被其他卡牌遮挡
-        if (_allRenderers != null)
-        {
-            for (int i = 0; i < _allRenderers.Length; i++)
-            {
-                try { _allRenderers[i].sortingOrder = _origSortingOrders[i] + returnSortingBoost; } catch {}
-            }
-        }
+    // (no render-order boost here; HandSplineZone controls ordering to avoid phase2 occlusion)
 
-        // Phase 1: 保持当前高度，在XZ平面上移动到手牌区域前方的临时点
-        float t = 0f;
-        float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
-        Vector2 startXZ = new Vector2(startPos.x, startPos.z);
-        Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
-        float currentY = startPos.y; // 保持当前高度
-        Vector2 velocity = Vector2.zero;
+    // Phase 1: 在 XZ 平面移动到临时点，同时平滑将 Y 插值到 homeY（以确保在 phase2 开始前 Y 已到位）
+    float t = 0f;
+    float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
+    Vector2 startXZ = new Vector2(startPos.x, startPos.z);
+    Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
+    float startY = startPos.y;
+    Vector2 velocity = Vector2.zero;
 
         if (debugHoverLogs)
         {
@@ -639,17 +632,20 @@ public class CardView3D : MonoBehaviour
             Vector2 toTarget = tempXZ2 - currentXZ;
             float distanceToTarget = toTarget.magnitude;
             
-            // 使用速度系数直接控制移动
+            // 使用速度系数直接控制移动（XZ）并平滑插值 Y
             float baseSpeed = 5f; // 基础速度
             float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
             float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
-            
-            // 平滑过渡到目标速度
+
+            // 平滑过渡到目标速度（XZ）
             velocity = Vector2.Lerp(velocity, toTarget.normalized * targetSpeed, Time.deltaTime * 10f);
             Vector2 newXZ = currentXZ + velocity * Time.deltaTime;
 
-            // 应用位置（保持Y不变）和旋转
-            transform.position = new Vector3(newXZ.x, currentY, newXZ.y);
+            // 在 phase1 中平滑将 Y 从 startY => homeY，使用同一个速度/曲线系数作为进度量
+            float y = Mathf.Lerp(startY, homeY, speedFactor);
+
+            // 应用位置（包含 Y）和旋转
+            transform.position = new Vector3(newXZ.x, y, newXZ.y);
             transform.rotation = Quaternion.Slerp(startRot, _homeRot, a * 0.4f);
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
@@ -660,8 +656,8 @@ public class CardView3D : MonoBehaviour
             yield return null;
         }
 
-        // 确保在进入阶段2之前，XZ位置完全正确
-        transform.position = new Vector3(tempXZ.x, currentY, tempXZ.z);
+    // 确保在进入阶段2之前，位置完全正确（Y 已到位）
+    transform.position = new Vector3(tempXZ.x, homeY, tempXZ.z);
         yield return null;
 
         // Phase 2: 从临时点平滑移动到最终位置
@@ -716,14 +712,8 @@ public class CardView3D : MonoBehaviour
             yield return null;
         }
 
-        // 恢复原始排序顺序
-        if (_allRenderers != null)
-        {
-            for (int i = 0; i < _allRenderers.Length; i++)
-            {
-                try { _allRenderers[i].sortingOrder = _origSortingOrders[i]; } catch {}
-            }
-        }
+        // render order is managed by HandSplineZone; do not override here to avoid
+        // inconsistent occlusion during phase2.
 
         // 让一帧过去再退出，保证排序恢复不会与最后一帧位置写入产生竞争
         yield return null;
@@ -1242,6 +1232,12 @@ public class CardView3D : MonoBehaviour
                 // 在槽位局部空间内进行插值动画
                 Vector3 releaseWorldPos = startPos;
                 Quaternion releaseWorldRot = startRot;
+                // Unregister from origin hand zone early so remaining cards can re-layout while
+                // this card animates toward the slot.
+                if (originZone != null)
+                {
+                    try { originZone.UnregisterCard(this); } catch { }
+                }
                 transform.SetParent(slot.transform, true);
                 Vector3 startLocalPos = slot.transform.InverseTransformPoint(releaseWorldPos);
                 Vector3 targetLocalPos = slot.transform.InverseTransformPoint(targetPos);
@@ -1269,12 +1265,6 @@ public class CardView3D : MonoBehaviour
                     handIndex = -1;
                     slotIndex = -1;
                     _homeSet = false;
-
-                    if (originZone != null)
-                    {
-                        try { originZone.UnregisterCard(this); }
-                        catch { }
-                    }
 
                     transform.SetParent(slot.transform, true);
 
