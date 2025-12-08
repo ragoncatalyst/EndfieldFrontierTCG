@@ -2220,6 +2220,7 @@ MonoBehaviour:
   returnAheadZ: 1
   returnPhase1: 0.7
   returnPhase2: 0.5
+  returnNeighborYOffset: 0
   debugLogs: 1
   handZoneRevision: rev_2025-09-03_01
   interactLayerMask:

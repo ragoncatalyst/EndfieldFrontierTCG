@@ -73,8 +73,9 @@ namespace EndfieldFrontierTCG.Board
 
         public bool TryPlaceCard(CardView3D card)
         {
-            Debug.Log($"[CardSlotBehaviour] 开始尝试放置卡牌到槽位 {name}");
-            Debug.Log($"[CardSlotBehaviour] 卡牌当前父物体: {(card.transform.parent != null ? card.transform.parent.name : "null")}");
+            // 注释掉调试代码
+            // Debug.Log($"[CardSlotBehaviour] 开始尝试放置卡牌到槽位 {name}");
+            // Debug.Log($"[CardSlotBehaviour] 卡牌当前父物体: {(card.transform.parent != null ? card.transform.parent.name : "null")}");
 
             if (card == null || _currentCard != null || !card.IsUnitCard) 
             {

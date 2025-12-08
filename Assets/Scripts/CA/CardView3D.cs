@@ -10,9 +10,15 @@ using EndfieldFrontierTCG.Board;
 // - Clear lifecycle: Pickup -> Drag -> Release
 public class CardView3D : MonoBehaviour
 {
+    // 手牌静止排列时的真实位置
+    private Vector3 _handRestPosition;
+    // 拖拽前的真实初始位置
     [Header("Refs")]
     public Rigidbody body;
+    private Vector3 _preDragPosition;
     public BoxCollider box;
+    // Shared physic material used to make card-card collisions frictionless
+    private static PhysicMaterial s_cardNoFrictionMat;
     public Renderer MainRenderer; // 可选：展示卡图
     public TMP_Text NameText;
     public TMP_Text HPText;
@@ -34,11 +40,10 @@ public class CardView3D : MonoBehaviour
     [HideInInspector] public int createId = -1;  // 创建顺序：旧卡小，新卡大
     private static int s_nextCreateId = 0;
     [HideInInspector] public int cardId = -1;    // 绑定的数据ID
-
-    [Header("Heights")]
-    public float dragPlaneY = 0.07f; // 拖拽高度降到原本的20%，避免抬得过高
-    public float groundY = 0f;
-
+    // 保存最近一次已知的槽位索引（用于被移出手牌时的回插参考）
+    [HideInInspector] public int lastKnownSlotIndex = -1;
+    [HideInInspector] public int lastKnownHandIndex = -1;
+    // ...其余成员...
     [Header("Follow (Leaf)")]
     public float followSmooth = 0.06f;
     public float followLeanMaxDeg = 18f;
@@ -51,11 +56,7 @@ public class CardView3D : MonoBehaviour
     public float startBoostTime = 0.15f;
     [Tooltip("起始阶段在倾斜角度上的乘数（>1 更明显）")]
     public float startBoostMul = 1.6f;
-    [Header("Lift (Rising)")]
-    [Tooltip("速度映射到上升位移的比例（单位/秒 -> 米）")]
-    public float followLiftScale = 0.02f;
-    [Tooltip("上升位移的最大值（米）")]
-    public float followLiftMax = 0.12f;
+
 
     [Header("Drag Lean Limits")]
     [Tooltip("绕本地 X 轴的最大前后倾角（度）")]
@@ -272,10 +273,68 @@ public class CardView3D : MonoBehaviour
 
     private void Awake()
     {
+        // 强制初始化，防止Inspector和Prefab污染
+        // 不再使用字段，相关数值直接硬编码到用到的地方
+
         _cam = Camera.main != null ? Camera.main : Camera.current;
         if (body == null) body = GetComponent<Rigidbody>();
         if (box == null) box = GetComponent<BoxCollider>();
         if (box == null) box = GetComponentInChildren<BoxCollider>(true);
+        // Ensure card colliders use a shared frictionless physic material to avoid
+        // friction-caused sticking/penetration artifacts between cards.
+        try
+        {
+            if (s_cardNoFrictionMat == null)
+            {
+                s_cardNoFrictionMat = new PhysicMaterial("Card_NoFriction")
+                {
+                    dynamicFriction = 0f,
+                    staticFriction = 0f,
+                    frictionCombine = PhysicMaterialCombine.Minimum,
+                    bounciness = 0f,
+                    bounceCombine = PhysicMaterialCombine.Minimum
+                };
+            }
+            // Assign to primary box collider
+            if (box != null) box.material = s_cardNoFrictionMat;
+            // Also assign to any other colliders under the card (children)
+            var cols = GetComponentsInChildren<Collider>(true);
+            if (cols != null)
+            {
+                for (int i = 0; i < cols.Length; i++)
+                {
+                    var c = cols[i]; if (c == null) continue;
+                    // keep triggers as-is but they can still carry material without harm
+                    c.material = s_cardNoFrictionMat;
+                }
+            }
+
+            // If the primary box collider is a trigger (used by other systems), create or
+            // reuse a child non-trigger collider for physics interactions so cards can
+            // still participate in frictionless collisions without changing the trigger.
+            try
+            {
+                if (box != null && box.isTrigger)
+                {
+                    BoxCollider phys = null;
+                    var t = transform.Find("PhysicsCollider");
+                    if (t != null) phys = t.GetComponent<BoxCollider>();
+                    if (phys == null)
+                    {
+                        var go = new GameObject("PhysicsCollider");
+                        go.transform.SetParent(transform, false);
+                        phys = go.AddComponent<BoxCollider>();
+                    }
+                    phys.size = box.size;
+                    phys.center = box.center;
+                    phys.isTrigger = false;
+                    phys.material = s_cardNoFrictionMat;
+                    phys.gameObject.layer = gameObject.layer;
+                }
+            }
+            catch { }
+        }
+        catch { }
         createId = s_nextCreateId++;
         _baseRot = transform.rotation; // 使用当前旋转作为基准
         if (body != null)
@@ -289,7 +348,8 @@ public class CardView3D : MonoBehaviour
         if (box != null)
         {
             box.enabled = true;
-            box.isTrigger = false; // 默认非触发器，确保 OnMouse 事件可被拾取
+            // Do not force box.isTrigger here; some systems rely on the collider being a trigger.
+            // If a physics (non-trigger) collider is required, a separate child collider will be created.
         }
         _allRenderers = GetComponentsInChildren<Renderer>(true);
         if (_allRenderers != null && _allRenderers.Length > 0)
@@ -351,13 +411,15 @@ public class CardView3D : MonoBehaviour
             Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out blocked);
             if ((corr - transform.position).sqrMagnitude > 1e-8f)
             {
+                Debug.Log($"[CardView3D] transform.position修改前: {transform.position}");
                 transform.position = corr;
+                Debug.Log($"[CardView3D] transform.position修改后: {transform.position}");
             }
             if (elevateWhenBlocked)
             {
                 float up = elevateUpSpeed * Time.deltaTime;
                 float down = elevateDownSpeed * Time.deltaTime;
-                float planeY = dragPlaneY;
+                float planeY = 0.07f;
                 _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
                 Vector3 p = transform.position; p.y = planeY + _elevateY; transform.position = p;
             }
@@ -372,7 +434,7 @@ public class CardView3D : MonoBehaviour
             {
                 float up = elevateUpSpeed * Time.deltaTime;
                 float down = elevateDownSpeed * Time.deltaTime;
-                float planeY = dragPlaneY;
+                float planeY = 0.07f;
                 _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
                 Vector3 p = transform.position; p.y = planeY + _elevateY; transform.position = p;
             }
@@ -387,24 +449,25 @@ public class CardView3D : MonoBehaviour
 
     public void SetHomePose(Vector3 pos, Quaternion rot)
     {
+        // 记录手牌静止排列时的真实位置
+        _handRestPosition = pos;
         // 清除父级引用
         _homeParent = null;
-
         // 直接使用世界空间坐标和旋转
         _homePos = pos;
-        _homeRot = rot;
-
+        // 强制零 Z 轴旋转，确保手牌与归位过程中 Z 始终为 0
+        Vector3 rEuler = rot.eulerAngles;
+        Quaternion rotZ0 = Quaternion.Euler(rEuler.x, rEuler.y, 0f);
+        _homeRot = rotZ0;
         // 本地空间坐标和旋转与世界空间相同
         _homeLocalPos = pos;
-        _homeLocalRot = rot;
-
-        // 标记家位置已设置
+        _homeLocalRot = rotZ0;
         _homeSet = true;
-
         if (debugHoverLogs)
-        {
             Debug.Log($"[CardView3D] 设置家位置（无父级） - 世界坐标: {pos}");
-        }
+        // 将基准旋转的 Z 轴清零，保证手牌内 tilt/lean 计算以 Z=0 为中心
+        _baseRot = Quaternion.Euler(_baseRot.eulerAngles.x, _baseRot.eulerAngles.y, 0f);
+        Debug.Log($"[CardView3D] SetHomePose called - pos: {pos}, rot: {rot.eulerAngles}");
     }
 
     public void SetHomeFromZone(Transform zone, Vector3 worldPos, Quaternion worldRot)
@@ -424,9 +487,10 @@ public class CardView3D : MonoBehaviour
             _homeLocalRot = worldRot;
         }
 
-        // 记录世界空间坐标和旋转（用于快速访问）
-        _homePos = worldPos;
-        _homeRot = worldRot;
+    // 记录世界空间坐标和旋转（用于快速访问）
+    _homePos = worldPos;
+    // 强制 Z 轴为零，保证手牌与归位过程中 Z 始终为 0
+    Vector3 wr = worldRot.eulerAngles;
 
         // 标记家位置已设置
         _homeSet = true;
@@ -435,6 +499,8 @@ public class CardView3D : MonoBehaviour
         {
             Debug.Log($"[CardView3D] 设置家位置 - 世界坐标: {worldPos}, 本地坐标: {_homeLocalPos}, 父级: {(zone != null ? zone.name : "无")}");
         }
+        // 同步基准旋转，确保手牌中的旋转基准 Z 分量为 0
+        _baseRot = Quaternion.Euler(_baseRot.eulerAngles.x, _baseRot.eulerAngles.y, 0f);
     }
 
     public void GetPlacementExtents(Quaternion targetRotation, out float minY, out float maxY)
@@ -552,8 +618,25 @@ public class CardView3D : MonoBehaviour
         }
     }
 
+    // Public accessor used by HandSplineZone via reflection to obtain the
+    // canonical home/world pose for this card (position + rotation).
+    // Returns a ValueTuple so invoking code can directly deconstruct it.
+    public (Vector3, Quaternion) GetHomePose()
+    {
+        GetHomeWorldPose(out Vector3 pos, out Quaternion rot);
+        return (pos, rot);
+    }
+
     public void SnapTo(Vector3 pos, Quaternion rot)
     {
+        Debug.Log($"[CardView3D] SnapTo called - 初始位置: {transform.position}, 目标位置: {pos}, 目标旋转: {rot.eulerAngles}");
+
+        // 调试：打印传入的 pos 值
+        Debug.Log($"SnapTo called with pos: {pos}");
+
+        // 记录手牌静止排列时的真实位置
+        _handRestPosition = pos;
+
         StopAllCoroutines();
         transform.position = pos;
         transform.rotation = rot;
@@ -575,8 +658,40 @@ public class CardView3D : MonoBehaviour
         _returnHomeCo = StartCoroutine(ReturnToHomeTwoPhase(aheadZ, phase1Time, phase2Time));
     }
 
+    // Unified return entry point: always attempt to use parent HandSplineZone (if any)
+    // so that the deferred-insert two-phase flow is used. Falls back to local two-phase
+    // return or drop if no home is available.
+    public void ReturnHomeUnified()
+    {
+        // Prefer zone-managed return which handles gap reservation and centralized ordering
+        var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+        try
+        {
+            if (zone != null && zone.TryReturnCardToHome(this))
+            {
+                return;
+            }
+        }
+        catch {}
+
+        // Otherwise fall back to local two-phase return if we have a home pose
+        if (_homeSet)
+        {
+            BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
+            return;
+        }
+
+        // No home: play drop animation as a last resort
+        StartCoroutine(ReleaseDrop());
+    }
+
+    // 记录拖拽前的Y值（非交互状态时的Y）
+    private float _preDragY;
+
     private IEnumerator ReturnToHomeTwoPhase(float aheadZ, float t1, float t2)
     {
+        Debug.Log($"[CardView3D] 开始归位 - 当前世界位置: {transform.position}, 目标位置: {_handRestPosition}, aheadZ: {aheadZ}, 阶段1时间: {t1}, 阶段2时间: {t2}");
+
         // 在归位阶段尽量隔离物理：不禁用刚体组件本身（Rigidbody 没有 enabled），只关闭碰撞/重力并冻结
         bool saved = false; bool prevBoxEnabled=false; bool prevKin=false, prevGrav=false, prevDetect=false; RigidbodyConstraints prevCons=RigidbodyConstraints.None;
         if (body != null)
@@ -598,10 +713,20 @@ public class CardView3D : MonoBehaviour
         }
         IsReturningHome = true;
     Vector3 startPos = transform.position;
+    // 确保开始时 Z 轴为 0（避免首帧出现 Z 轴旋转抖动）
     Quaternion startRot = transform.rotation;
-    float homeY = _homePos.y;
-    // temp point just "above" home along +Z on XZ plane (world Z+)
-    Vector3 tempXZ = new Vector3(_homePos.x, homeY, _homePos.z + aheadZ);
+    Vector3 sEuler = startRot.eulerAngles;
+    startRot = Quaternion.Euler(sEuler.x, sEuler.y, 0f);
+    // 立即应用以确保整个归位过程不含 Z 轴旋转
+    transform.rotation = startRot;
+    // 强制在第一阶段立即把卡牌摆正为 (90, 0, 0)（以避免在 phase1 结束前因角度导致穿插）
+    Quaternion earlyFlatRot = Quaternion.Euler(90f, 0f, 0f);
+    transform.rotation = earlyFlatRot;
+    // 使用拖拽前记录的Y值作为归位目标Y
+    // 归位目标为拖拽前的完整位置
+    Vector3 returnTarget = _handRestPosition;
+    // temp point just "above" returnTarget 沿Z轴偏移
+    Vector3 tempXZ = new Vector3(returnTarget.x, returnTarget.y, returnTarget.z + aheadZ);
 
     // (no render-order boost here; HandSplineZone controls ordering to avoid phase2 occlusion)
 
@@ -610,7 +735,7 @@ public class CardView3D : MonoBehaviour
     float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
     Vector2 startXZ = new Vector2(startPos.x, startPos.z);
     Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
-    float startY = startPos.y;
+    float startY = _handRestPosition.y; // 确保 Y 值从一开始就是正确的
     Vector2 velocity = Vector2.zero;
 
         if (debugHoverLogs)
@@ -618,7 +743,7 @@ public class CardView3D : MonoBehaviour
             Debug.Log($"[CardView3D] 开始第一阶段返回 - 从: {startPos}, 到前方点: {tempXZ}, 持续: {dur1}秒");
         }
 
-        while (t < dur1)
+            while (t < dur1)
         {
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1);
@@ -641,12 +766,12 @@ public class CardView3D : MonoBehaviour
             velocity = Vector2.Lerp(velocity, toTarget.normalized * targetSpeed, Time.deltaTime * 10f);
             Vector2 newXZ = currentXZ + velocity * Time.deltaTime;
 
-            // 在 phase1 中平滑将 Y 从 startY => homeY，使用同一个速度/曲线系数作为进度量
-            float y = Mathf.Lerp(startY, homeY, speedFactor);
-
-            // 应用位置（包含 Y）和旋转
-            transform.position = new Vector3(newXZ.x, y, newXZ.y);
-            transform.rotation = Quaternion.Slerp(startRot, _homeRot, a * 0.4f);
+            // phase1: XZ插值到tempXZ，Y插值到returnTarget.y
+            float newX = Mathf.Lerp(startPos.x, tempXZ.x, speedFactor);
+            float newZ = Mathf.Lerp(startPos.z, tempXZ.z, speedFactor);
+            float newY = Mathf.Lerp(startY, returnTarget.y, speedFactor);
+            transform.position = new Vector3(newX, newY, newZ);
+            transform.rotation = earlyFlatRot;
 
             if (debugHoverLogs && t % 0.1f < Time.deltaTime)
             {
@@ -657,60 +782,33 @@ public class CardView3D : MonoBehaviour
         }
 
     // 确保在进入阶段2之前，位置完全正确（Y 已到位）
-    transform.position = new Vector3(tempXZ.x, homeY, tempXZ.z);
+    // 归位动画阶段切换点：精确还原到拖拽前的真实初始位置
+    transform.position = returnTarget;
+    yield return null;
+
+    // Phase 2: 从临时点平滑移动到最终位置
+    Vector3 startP2 = transform.position;
+    Quaternion startR2 = transform.rotation;
+    float dur2 = Mathf.Max(0.01f, returnPhase2Duration);
+    float tP2 = 0f;
+    // phase2: 只插值Z到returnTarget.z，X/Y保持不变
+    while (tP2 < dur2)
+    {
+        tP2 += Time.deltaTime;
+        float a = Mathf.Clamp01(tP2 / dur2);
+        var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+        float speedFactor = handZone != null ? handZone.returnPhase2Curve.Evaluate(a) : a;
+        float newZ = Mathf.LerpUnclamped(startP2.z, returnTarget.z, speedFactor);
+        transform.position = new Vector3(returnTarget.x, returnTarget.y, newZ);
+        transform.rotation = Quaternion.Slerp(startR2, _homeRot, a);
+        if (debugHoverLogs && tP2 % 0.1f < Time.deltaTime)
+        {
+            Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 位置: {transform.position}");
+        }
         yield return null;
-
-        // Phase 2: 从临时点平滑移动到最终位置
-        Vector3 startP2 = transform.position;
-        Quaternion startR2 = transform.rotation;
-        Vector3 endP2 = new Vector3(_homePos.x, homeY, _homePos.z);
-        float dur2 = Mathf.Max(0.01f, returnPhase2Duration);
-        float tP2 = 0f;
-        Vector3 velocity3D = Vector3.zero;
-
-        // 添加前向偏移，避免被相邻卡片遮挡
-        Vector3 cameraForward = CameraForwardPlanar();
-        startP2 += cameraForward * returnFrontBias;
-
-        if (debugHoverLogs)
-        {
-            Debug.Log($"[CardView3D] 开始第二阶段返回 - 从: {startP2}, 到: {endP2}, 持续: {dur2}秒");
-        }
-
-        while (tP2 < dur2)
-        {
-            tP2 += Time.deltaTime;
-            float a = Mathf.Clamp01(tP2 / dur2);
-
-            // 获取当前速度系数（0-1范围）
-            var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
-            float speedFactor = handZone != null ? handZone.returnPhase2Curve.Evaluate(a) : a;
-
-            // 计算当前位置到目标的方向和距离
-            Vector3 toTarget = endP2 - transform.position;
-            toTarget.y = homeY - transform.position.y; // 确保Y轴也平滑移动
-            float distanceToTarget = toTarget.magnitude;
-
-            // 使用速度系数直接控制移动
-            float baseSpeed = 4f; // 基础速度
-            float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
-            float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
-            
-            // 平滑过渡到目标速度
-            velocity3D = Vector3.Lerp(velocity3D, toTarget.normalized * targetSpeed, Time.deltaTime * 8f);
-            Vector3 newPos = transform.position + velocity3D * Time.deltaTime;
-
-            // 应用位置和旋转
-            transform.position = newPos;
-            transform.rotation = Quaternion.Slerp(startR2, _homeRot, a);
-
-            if (debugHoverLogs && tP2 % 0.1f < Time.deltaTime)
-            {
-                Debug.Log($"[CardView3D] 第二阶段进度 - {(a * 100):F0}%, 位置: {newPos}");
-            }
-
-            yield return null;
-        }
+    }
+    // 归位动画结束，精确还原到拖拽前的真实初始位置
+    transform.position = returnTarget;
 
         // render order is managed by HandSplineZone; do not override here to avoid
         // inconsistent occlusion during phase2.
@@ -760,7 +858,7 @@ public class CardView3D : MonoBehaviour
         CardType = string.IsNullOrEmpty(data.CA_Type) ? string.Empty : data.CA_Type.Trim();
         Category = ParseCategory(CardType);
         gameObject.layer = LayerMask.NameToLayer("Default");
-        if (box != null) { box.enabled = true; box.isTrigger = false; }
+    if (box != null) { box.enabled = true; /* keep isTrigger as configured by other systems */ }
         var mrAll = GetComponentsInChildren<Renderer>(true);
         foreach (var r in mrAll) if (r != null) r.enabled = true;
         if (NameText != null) NameText.text = data.CA_Name_DIS;
@@ -838,6 +936,8 @@ public class CardView3D : MonoBehaviour
     private void OnMouseDown()
     {
         if (suppressOnMouseHandlers && !_allowInternalInvoke) return;
+        // 记录拖拽前的完整位置
+        _preDragPosition = transform.position;
         // Reset state
         _state = DragState.Picking;
         if (_returnHomeCo != null) { StopCoroutine(_returnHomeCo); _returnHomeCo = null; IsReturningHome = false; }
@@ -855,7 +955,7 @@ public class CardView3D : MonoBehaviour
             body.constraints = RigidbodyConstraints.FreezePositionY; // 由代码控制 Y 平面
         }
         // 为了拖拽与 OnMouse 事件，保持非触发器。如果需要物理禁用，用 FreezeAll 代替
-        if (box != null) box.isTrigger = false;
+    // Preserve box.isTrigger state; do not force non-trigger here as other systems may require it
 
         if (IsEventCard)
         {
@@ -881,8 +981,7 @@ public class CardView3D : MonoBehaviour
                 if (renderer != null)
                 {
                     renderer.enabled = true;
-                    // 提升渲染顺序，确保在拖动时可见
-                    renderer.sortingOrder += dragSortingBoost;
+                    // Do not change sortingOrder here; hand render order is centralized in HandSplineZone.
                 }
             }
         }
@@ -895,7 +994,7 @@ public class CardView3D : MonoBehaviour
     {
         float t = 0f, dur = 0.12f;
         Vector3 start = transform.position;
-        Vector3 end = new Vector3(start.x, dragPlaneY, start.z) + CameraForwardPlanar() * dragFrontBias;
+        Vector3 end = new Vector3(start.x, 0.07f, start.z) + CameraForwardPlanar() * dragFrontBias;
         while (t < dur)
         {
             t += Time.deltaTime;
@@ -911,7 +1010,7 @@ public class CardView3D : MonoBehaviour
         if (suppressOnMouseHandlers && !_allowInternalInvoke) return;
         if (_state != DragState.Dragging && _state != DragState.Picking) return;
         // 用当前高度作为拖拽平面，避免因动画升降导致的错层
-        float planeY = dragPlaneY;
+        float planeY = 0.07f;
         if (TryRayOnPlane(planeY, out Vector3 pt))
         {
             if (!_dragOffsetInitialized)
@@ -994,7 +1093,9 @@ public class CardView3D : MonoBehaviour
     {
         if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
         Vector3 f = _cam != null ? _cam.transform.forward : Vector3.forward;
-        f.y = 0f; if (f.sqrMagnitude < 1e-6f) f = Vector3.forward; return f.normalized;
+        f.y = 0f; if (f.sqrMagnitude < 1e-6f) f = Vector3.forward;
+        f.Normalize();
+        return f;
     }
 
     private void BoostDragRendering(bool enable)
@@ -1018,9 +1119,7 @@ public class CardView3D : MonoBehaviour
                         _origSortingOrders = new int[_allRenderers.Length];
                     }
                     _origSortingOrders[i] = r.sortingOrder;
-                    
-                    // 提升排序顺序
-                    r.sortingOrder += dragSortingBoost;
+                    // Do not modify sortingOrder here; HandSplineZone will assign render orders centrally.
                 }
                 else
                 {
@@ -1060,10 +1159,13 @@ public class CardView3D : MonoBehaviour
                     // 只允许 Y+ 分离（绝不沿 X/Z 顶开）
                     Vector3 prefer = new Vector3(0f, Mathf.Max(0f, dir.y), 0f);
                     if (prefer.sqrMagnitude < 1e-8f) prefer = Vector3.up; // 兜底：至少向上分离
-                    float step = Mathf.Min(dist, maxStep);
+                    float step = Mathf.Min(dist, maxStep * 2);
                     corrected += prefer.normalized * step;
                     any = true;
                     blocked = true;
+
+                    // 调试：打印分离方向和距离
+                    Debug.Log($"[AdjustTargetForCollisions] 分离方向: {dir}, 距离: {dist}, 当前Y: {corrected.y}");
                 }
             }
             if (!any) break;
@@ -1177,13 +1279,8 @@ public class CardView3D : MonoBehaviour
             if (!slot.CanAcceptCard(this))
             {
                 Debug.LogWarning($"[CardView3D] 槽位 {slot.name} 无法接受卡牌");
-                if (originZone != null && originZone.TryReturnCardToHome(this)) yield break;
-                if (_homeSet)
-                {
-                    BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
-                    yield break;
-                }
-                yield return ReleaseDrop();
+                // Use unified return behavior so all failed placements use the same two-phase return
+                ReturnHomeUnified();
                 yield break;
             }
 
@@ -1198,8 +1295,9 @@ public class CardView3D : MonoBehaviour
             Vector3 savedHomePos = _homePos;
             Quaternion savedHomeRot = _homeRot;
             bool savedHomeSet = _homeSet;
-            int savedSlotIndex = slotIndex;
+
             int savedHandIndex = handIndex;
+            int savedSlotIndex = slotIndex;
 
             bool placed = false;
             IsReturningHome = true;
@@ -1307,14 +1405,8 @@ public class CardView3D : MonoBehaviour
                 handIndex = savedHandIndex;
                 slotIndex = savedSlotIndex;
 
-                if (originZone != null && originZone.TryReturnCardToHome(this)) yield break;
-                if (_homeSet)
-                {
-                    BeginSmoothReturnToHome(returnFrontBias, returnPhase1Duration, returnPhase2Duration);
-                    yield break;
-                }
-
-                yield return ReleaseDrop();
+                // Use unified return flow for failed placement
+                ReturnHomeUnified();
                 yield break;
             }
             finally
@@ -1575,9 +1667,18 @@ public class CardView3D : MonoBehaviour
             float moveRoll = Mathf.Clamp(moveDir.x * speedFactor * leanRollGain * 0.6f, -maxRoll, maxRoll);
 
             float desiredPitch = Mathf.Clamp(basePitch + movePitch, -maxPitch, maxPitch);
+           
+
             float desiredRoll = Mathf.Clamp(baseRoll + moveRoll, -maxRoll, maxRoll);
 
             float yawPointer = pointerDir.x * pointerWeight * leanYawGain * 0.5f;
+
+
+
+
+
+
+
             float yawMove = 0f;
             if (pointerDir.sqrMagnitude > 1e-6f && moveDir.sqrMagnitude > 1e-6f)
             {
@@ -1587,6 +1688,7 @@ public class CardView3D : MonoBehaviour
             float desiredYaw = Mathf.Clamp(yawPointer + yawMove, -maxYaw, maxYaw);
 
             _pointerAngle = Mathf.Lerp(_pointerAngle, desiredYaw, filter);
+
             pitch = Mathf.Lerp(0f, desiredPitch, blend);
             roll = Mathf.Lerp(0f, desiredRoll, blend);
             yaw = _pointerAngle;
@@ -1632,7 +1734,7 @@ public class CardView3D : MonoBehaviour
         // 拖拽中不做额外抬升，避免改变跟随平面的 y（造成鼠标与物体错位）
         if (_state != DragState.Dragging)
         {
-            float lift = Mathf.Clamp(vMag * followLiftScale, 0f, followLiftMax);
+            float lift = 0f;
             transform.position += Vector3.up * lift;
         }
     }
@@ -1688,7 +1790,7 @@ public class CardView3D : MonoBehaviour
     private IEnumerator ReleaseDrop()
     {
         Vector3 start = transform.position;
-        Vector3 end = new Vector3(transform.position.x, groundY, transform.position.z);
+        Vector3 end = new Vector3(transform.position.x, 0f, transform.position.z);
         Quaternion startR = transform.rotation;
         Quaternion endR = _baseRot;
         float t = 0f, dur = 0.2f; // 固定下落时间
@@ -1897,7 +1999,7 @@ public class CardView3D : MonoBehaviour
         if (box != null)
         {
             box.enabled = true;
-            box.isTrigger = false;
+            // Preserve box.isTrigger state; do not force non-trigger here as other systems may require it
             box.gameObject.layer = LayerMask.NameToLayer("Default");
             // 恢复碰撞箱
             if (_boxExtended)
@@ -2033,5 +2135,18 @@ public class CardView3D : MonoBehaviour
             r.sortingOrder = finalOrder;
             _origSortingOrders[i] = finalOrder;
         }
+    }
+
+    public void SetRenderOrder(int order)
+    {
+        ApplyHandRenderOrder(order);
+    }
+
+    // 保证卡牌Y值不低于21且只保留两位小数
+    private static float AdjustCardY(float y)
+    {
+        // 确保卡牌Y值不接近20，并保留两位小数
+        float adjustedY = Mathf.Max(y, 22f); // 将最低值提高到22
+        return Mathf.Round(adjustedY * 100f) / 100f;
     }
 }
