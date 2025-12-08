@@ -99,7 +99,7 @@ namespace EndfieldFrontierTCG.Environment
 			{
 				sun.shadows = LightShadows.Soft;
 				sun.shadowStrength = 0.8f;
-				sun.shadowBias = 0.02f;
+				sun.shadowBias = 0f; // 动态Y值，移除固定值
 				sun.shadowNormalBias = 0.4f;
 				sun.shadowNearPlane = 0.2f;
 			}

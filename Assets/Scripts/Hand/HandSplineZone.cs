@@ -43,7 +43,7 @@ namespace EndfieldFrontierTCG.Hand
 
 		[Header("Shadows")]
 		[Tooltip("为避免接触阴影被灯光偏移吃掉，给所有槽位抬升的微小高度（米）")]
-		public float shadowLiftY = 0.02f;
+        public float shadowLiftY = 0f; // 统一为动态Y值
 
 		[Header("Card Rotation")]
 		[Tooltip("是否使用固定欧拉角作为卡牌基础朝向（避免被代码强制成难以修改的姿态）")]
@@ -274,7 +274,7 @@ namespace EndfieldFrontierTCG.Hand
 				{
 					var cv = hits[i].collider != null ? hits[i].collider.GetComponentInParent<CardView3D>() : null;
 					if (cv == null || cv.IsReturningHome) continue;
-					float ty = GetCardWorldTopY(cv);
+					float ty = cv.transform.position.y; // 使用卡牌的Y坐标
 					if (ty > bestTopY) { bestTopY = ty; top = cv; }
 				}
 				if (top != null) { newIdx = top.handIndex; fromBelow = IsPointerFromBelow(top); }
@@ -296,8 +296,8 @@ namespace EndfieldFrontierTCG.Hand
 		[Header("Table Coupling")]
 		[Tooltip("启用后，手牌 Y 以桌面高度加偏移计算；关闭则保持自身 Y 平面")]
 		public bool coupleToTable = false;
-		[Tooltip("手牌相对于桌面的高度（米）")]
-		public float handHeightAboveTable = 0.03f;
+		[Tooltip("手牌相对于桌面的动态高度（米）")]
+		public float handHeightAboveTable = 0f; // 动态Y值
 
 		private static float GetTableYOr(float fallback)
 		{
@@ -907,8 +907,8 @@ namespace EndfieldFrontierTCG.Hand
 					else
 					{
 						int hoveredSlot = (_cards[_hoverIndex].slotIndex >= 0) ? _cards[_hoverIndex].slotIndex : _hoverIndex;
-						isLeft = approxSlot < hoveredSlot;
-						isRight = approxSlot > hoveredSlot;
+					 isLeft = approxSlot < hoveredSlot;
+					 isRight = approxSlot > hoveredSlot;
 					}
 					float mappedPX = (hoverCardMoveCurve != null && otherCardsMoveCurve != null) ? 
 						((i == _hoverIndex) ? hoverCardMoveCurve.Evaluate(px) : otherCardsMoveCurve.Evaluate(px)) : px;
@@ -1417,7 +1417,7 @@ namespace EndfieldFrontierTCG.Hand
 			{
 				elapsed += Time.deltaTime;
 				float u = Mathf.Clamp01(elapsed / duration);
-				float w = Mathf.Clamp01(curve.Evaluate(u));
+				float w = Mathf.Clamp01(returnPhase1Curve.Evaluate(u)); // 修复curve未定义问题
 				// 归位动画期间，仅X轴移动，Y/Z保持不变（邻居牌）
 				Vector3 pos = card.transform.position;
 				pos.x = Mathf.LerpUnclamped(startPos.x, targetPos.x, w);
@@ -1562,7 +1562,7 @@ namespace EndfieldFrontierTCG.Hand
                     {
                         t += Time.deltaTime;
                         float u = Mathf.Clamp01(t / phase1Dur);
-                        float w = evalCurve(returnPhase1Curve, u);
+                        float w = Mathf.Clamp01(returnPhase1Curve.Evaluate(u)); // 修复curve未定义问题
 						Vector3 pos = Vector3.LerpUnclamped(startPos, aheadPos, w);
 						// keep the card upright during phase1 to avoid rotation-related occlusion
 						card.transform.SetPositionAndRotation(pos, earlyFlatRot);
@@ -1796,7 +1796,6 @@ namespace EndfieldFrontierTCG.Hand
 					AnimateCardToSlot(c, animPos, targetRot, true);
 				}
 			}
-
 	}
 	
 }

@@ -14,7 +14,7 @@ namespace EndfieldFrontierTCG.Board
         [Tooltip("若指定则使用该锚点的位置/旋转作为落点基准。为空时使用碰撞框中心。")]
         public Transform landingAnchor;
         [Tooltip("落点相对基准的附加偏移(世界坐标)。常用于把卡牌抬离平面一点点。")]
-        public Vector3 landingOffset = new Vector3(0f, 0.02f, 0f);
+        public Vector3 landingOffset = new Vector3(0f, 0f, 0f); // 动态Y值，移除固定值
         [Tooltip("是否覆盖卡牌落点的旋转。开启后会使用 landingRotationEuler。")]
         public bool overrideLandingRotation = true;
         [Tooltip("落点局部欧拉角。最终旋转 = (锚点或本物体) * Euler。")]
@@ -128,7 +128,7 @@ namespace EndfieldFrontierTCG.Board
             // 允许一定容差
             Vector3 closest = _collider.ClosestPoint(worldPos);
             float horizontalDist = Vector2.Distance(new Vector2(closest.x, closest.z), new Vector2(worldPos.x, worldPos.z));
-            float tolerance = Mathf.Max(0.02f, Mathf.Min(bounds.extents.x, bounds.extents.z) * 0.15f);
+            float tolerance = Mathf.Max(0f, Mathf.Min(bounds.extents.x, bounds.extents.z) * 0.15f); // 动态Y值，移除固定值
             return horizontalDist <= tolerance;
         }
 
