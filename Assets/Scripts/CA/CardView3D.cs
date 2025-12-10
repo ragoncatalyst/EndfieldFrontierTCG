@@ -866,25 +866,79 @@ public class CardView3D : MonoBehaviour
     // 强制在第一阶段立即把卡牌摆正为 (90, 0, 0)（以避免在 phase1 结束前因角度导致穿插）
     Quaternion earlyFlatRot = Quaternion.Euler(90f, 0f, 0f);
     transform.rotation = earlyFlatRot;
+<<<<<<< HEAD
 
     // temp point just "above" returnTarget 沿Z轴偏移
     Vector3 tempXZ = new Vector3(returnTarget.x, finalY, returnTarget.z + aheadZ);
+=======
+    // 确保所有牌进入手牌时使用动态Y值
+    Vector3 returnTarget = new Vector3(_handRestPosition.x, _handRestPosition.y, _handRestPosition.z); // 使用动态Y值
+>>>>>>> 0d6d85dbbbdbed86ae25d5e250479dbbeed0f8ef
 
-    // (no render-order boost here; HandSplineZone controls ordering to avoid phase2 occlusion)
+            // 调整渲染顺序，确保x大的卡牌遮挡x小的卡牌
+            var allCards = GameObject.FindObjectsOfType<CardView3D>();
+            foreach (var card in allCards)
+            {
+                if (card != this && card.transform.position.x < transform.position.x)
+                {
+                    var renderers = card.GetComponentsInChildren<Renderer>();
+                    foreach (var renderer in renderers)
+                    {
+                        renderer.sortingOrder = Mathf.Max(renderer.sortingOrder - 1, 0);
+                    }
+                }
+            }
 
     // Phase 1: 在 XZ 平面移动到临时点，同时平滑将 Y 插值到 homeY（以确保在 phase2 开始前 Y 已到位）
     float t = 0f;
     float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
     Vector2 startXZ = new Vector2(startPos.x, startPos.z);
+<<<<<<< HEAD
     Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
     float startY = transform.position.y; // start from current Y, interpolate toward finalY
     Vector2 velocity = Vector2.zero;
+=======
+    Vector2 tempXZ2 = new Vector2(_handRestPosition.x, _handRestPosition.z); // 替换tempXZ为动态值
+    float startY = _handRestPosition.y; // 确保 Y 值从一开始就是正确的
+>>>>>>> 0d6d85dbbbdbed86ae25d5e250479dbbeed0f8ef
 
-        if (debugHoverLogs)
+    while (t < dur1)
+    {
+        t += Time.deltaTime;
+        float a = Mathf.Clamp01(t / dur1);
+
+        // 获取当前速度系数（0-1范围）
+        var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+        float speedFactor = handZone != null ? handZone.returnPhase1Curve.Evaluate(a) : a;
+
+        Vector2 velocity = Vector2.zero; // 初始化velocity变量
+
+        Vector2 currentXZ = new Vector2(transform.position.x, transform.position.z);
+        Vector2 toTarget = tempXZ2 - currentXZ;
+        float distanceToTarget = toTarget.magnitude;
+
+        // 使用速度系数直接控制移动（XZ）并平滑插值 Y
+        float baseSpeed = 5f; // 基础速度
+        float maxSpeed = baseSpeed * (1f + distanceToTarget); // 距离越远速度越快
+        float targetSpeed = maxSpeed * speedFactor; // 应用速度曲线
+
+        // 平滑过渡到目标速度（XZ）
+        velocity = Vector2.Lerp(velocity, toTarget.normalized * targetSpeed, Time.deltaTime * 10f);
+        Vector2 newXZ = currentXZ + velocity * Time.deltaTime;
+
+        // phase1: XZ插值到tempXZ，Y插值到returnTarget.y
+        float newX = Mathf.Lerp(startPos.x, tempXZ2.x, speedFactor);
+        float newZ = Mathf.Lerp(startPos.z, tempXZ2.y, speedFactor);
+        float newY = Mathf.Lerp(startY, _handRestPosition.y, speedFactor);
+        transform.position = new Vector3(newX, newY, newZ);
+        transform.rotation = earlyFlatRot;
+
+        if (debugHoverLogs && t % 0.1f < Time.deltaTime)
         {
-            Debug.Log($"[CardView3D] 开始第一阶段返回 - 从: {startPos}, 到前方点: {tempXZ}, 持续: {dur1}秒");
+            Debug.Log($"[CardView3D] 第一阶段进度 - {(a * 100):F0}%, 位置: {newXZ}");
         }
 
+<<<<<<< HEAD
             while (t < dur1)
         {
             // allow external caller to force finalY while running
@@ -931,6 +985,10 @@ public class CardView3D : MonoBehaviour
 
             yield return null;
         }
+=======
+        yield return null;
+    }
+>>>>>>> 0d6d85dbbbdbed86ae25d5e250479dbbeed0f8ef
 
     // Ensure position Y is at final value before phase2
     transform.position = new Vector3(returnTarget.x, finalY, returnTarget.z);
@@ -1814,6 +1872,7 @@ public class CardView3D : MonoBehaviour
 
             float diagAdjust = pointerDir.x * pointerDir.y * pointerWeight * leanRollGain * 0.5f;
             baseRoll += diagAdjust;
+
 
             float movePitch = Mathf.Clamp(-moveDir.y * speedFactor * leanPitchGain * 0.6f, -maxPitch, maxPitch);
             float moveRoll = Mathf.Clamp(moveDir.x * speedFactor * leanRollGain * 0.6f, -maxRoll, maxRoll);

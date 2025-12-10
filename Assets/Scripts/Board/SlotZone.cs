@@ -56,7 +56,7 @@ namespace EndfieldFrontierTCG.Board
         // 所有位置相关的变量默认为0
         protected Vector3 originOffset = Vector3.zero;
         protected float yawDeg = 0f;
-        protected float yHeight = 0.01f; // 略微抬高以避免Z-fighting
+        protected float yHeight = 0f; // 动态Y值，移除固定值
 
         public virtual Vector3 GetSlotPosition(int r, int c)
         {

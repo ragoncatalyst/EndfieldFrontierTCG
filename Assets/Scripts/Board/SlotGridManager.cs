@@ -13,7 +13,7 @@ namespace EndfieldFrontierTCG.Board
         public Vector2 cellSize = new Vector2(1.25f, 2.0f);
         public Vector2 spacing = new Vector2(0.25f, 0.25f);
         public float yawDeg = 0f;
-        public float yHeight = 0.02f;
+        public float yHeight = 0f; // 动态Y值，移除固定值
         public Transform origin;
         [Header("Auto Center to Camera")]
         public bool centerToCameraBottom = true;
