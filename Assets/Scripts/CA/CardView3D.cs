@@ -1,402 +1,445 @@
 using System.Collections;
 using UnityEngine;
 using TMPro;
-using EndfieldFrontierTCG.CA;
-using EndfieldFrontierTCG.Board;
 
-// CardView3D (clean rewrite)
-// - Leaf-in-water follow: position SmoothDamp + rotation leaning into motion
-// - Low-speed wobble with hysteresis
-// - Clear lifecycle: Pickup -> Drag -> Release
+// Simplified CardView3D: core drag / return / snap behavior
+// - Keeps public API used by other systems: SnapTo, SetHomePose, SetHomeFromZone,
+//   GetHomePose, ReturnHomeUnified, BeginSmoothReturnToHome, ForceReturnYNow,
+//   SetTargetY, GetFinalHandY, ApplyHoverColliderExtend, ApplyHandRenderOrder, Bind
+// - Removes complex fallback branches, wobble, shadow helper, event playback, and many debug logs
+
 public class CardView3D : MonoBehaviour
 {
-    // 手牌静止排列时的真实位置
-    private Vector3 _handRestPosition;
-    // 拖拽前的真实初始位置
-    [Header("Refs")]
-    public Rigidbody body;
-    private Vector3 _preDragPosition;
+    // Public refs (kept minimal)
+    [Header("Refs")] public Rigidbody body;
     public BoxCollider box;
-    // Shared physic material used to make card-card collisions frictionless
-    private static PhysicMaterial s_cardNoFrictionMat;
-    public Renderer MainRenderer; // 可选：展示卡图
+    public Renderer MainRenderer;
     public TMP_Text NameText;
     public TMP_Text HPText;
     public TMP_Text ATKText;
-    public Texture2D MainTextureCache;
+
+    // Basic identity
     public enum CardCategory { Unknown, Unit, Event }
     public CardCategory Category { get; private set; } = CardCategory.Unknown;
     public string CardType { get; private set; } = string.Empty;
-    public bool IsEventCard => Category == CardCategory.Event;
-    public bool IsUnitCard => Category == CardCategory.Unit;
-    public const float DefaultPlacementHalfThickness = 0.01f;
-    [Header("Debug")]
-    public bool debugHoverLogs = true;
-    [SerializeField] private string cardViewRevision = "cv_rev_2025-09-03_01";
-    [Tooltip("用于物理射线兜底检测的层遮罩（-1 表示全部层）")]
-    public LayerMask interactLayerMask = ~0;
-    [HideInInspector] public int handIndex = -1; // 注册顺序索引（仅用于查找）
-    [HideInInspector] public int slotIndex = -1; // 当前所在槽位索引（用于布局计算）
-    [HideInInspector] public int createId = -1;  // 创建顺序：旧卡小，新卡大
-    private static int s_nextCreateId = 0;
-    [HideInInspector] public int cardId = -1;    // 绑定的数据ID
-    // 保存最近一次已知的槽位索引（用于被移出手牌时的回插参考）
-    [HideInInspector] public int lastKnownSlotIndex = -1;
-    [HideInInspector] public int lastKnownHandIndex = -1;
-    // ...其余成员...
-    [Header("Follow (Leaf)")]
-    public float followSmooth = 0.06f;
-    public float followLeanMaxDeg = 18f;
-    public float followLeanResponsiveness = 16f;
-    public float followLeanSpeedScale = 0.06f;
-    [Tooltip("每轴最大偏离基准角度（度）")]
-    public float maxAxisDeviationDeg = 10f;
-    [Header("Start Impulse")]
-    [Tooltip("拖拽起始阶段的短促强化持续时间（秒）")]
-    public float startBoostTime = 0.15f;
-    [Tooltip("起始阶段在倾斜角度上的乘数（>1 更明显）")]
-    public float startBoostMul = 1.6f;
+    [HideInInspector] public int handIndex = -1;
+    [HideInInspector] public int slotIndex = -1;
+    [HideInInspector] public int cardId = -1;
 
-
-    [Header("Drag Lean Limits")]
-    [Tooltip("绕本地 X 轴的最大前后倾角（度）")]
-    public float leanMaxPitchDeg = 40f;
-    [Tooltip("绕本地 Y 轴的最大左右扭转角（度）")]
-    public float leanMaxYawDeg = 20f;
-    [Tooltip("绕本地 Z 轴的最大左右倾角（度）")]
-    public float leanMaxRollDeg = 40f;
-    [Tooltip("速度映射到 Pitch 倾角的增益（度/单位速度）")]
-    public float leanPitchGain = 90f;
-    [Tooltip("速度映射到 Yaw 扭转的增益（度/单位速度）")]
-    public float leanYawGain = 30f;
-    [Tooltip("速度映射到 Roll 倾角的增益（度/单位速度）")]
-    public float leanRollGain = 90f;
-    [Tooltip("鼠标指针移动速度映射到倾斜强度的增益（单位速度 -> 0..1）")]
-    public float pointerLeanSpeedGain = 6f;
-    [Tooltip("当鼠标静止时倾斜强度衰减的速度（1/秒）")]
-    public float pointerLeanRelax = 6f;
-    [Tooltip("鼠标局部位置插值过滤频率（1/秒），值越大响应越快")]
-    public float pointerLeanFilter = 16f;
-    [Header("Wobble Timing")]
-    [Tooltip("拖拽速度低于阈值后，需要保持静止多长时间才开始晃动（秒）")]
-    public float wobbleStartDelay = 0.25f;
-    [Tooltip("拖拽速度重新升高后，多少秒后才允许再次进入晃动（秒）")]
-    public float wobbleCooldown = 0.25f;
-
-    [Header("Wobble (Low-speed)")]
-    public float wobbleAmpDeg = 3f; // 降低 y 轴等整体摆动感
-    public float wobblePeriod = 1.4f;
-    public float wobbleEaseIn = 0.15f;
-    public float wobbleEaseOut = 0.12f;
-    public float speedThreshold = 1.0f;
-    public float speedHysteresis = 0.3f;
-
-    [Header("Release Animation")]
-    [Tooltip("下落动画的速度曲线（0→1）")] 
-    public AnimationCurve dropCurve = new AnimationCurve(
-        new Keyframe(0f, 0f, 0f, 2f),     // 开始时快速加速
-        new Keyframe(0.7f, 0.9f, 0.8f, 0.5f), // 70%时完成90%的移动
-        new Keyframe(1f, 1f, 0f, 0f)      // 平滑结束
-    );
-    [Tooltip("下落动画的持续时间（秒）")] 
-    public float dropDuration = 0.25f;
-
-    [Header("Two-Phase Return Animation")]
-    [SerializeField]
-    [Tooltip("第一阶段的持续时间（秒）")]
-    private float _returnPhase1Duration = 0.2f;
-    public float returnPhase1Duration
-    {
-        get => _returnPhase1Duration;
-        set
-        {
-            _returnPhase1Duration = Mathf.Max(0.01f, value);
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第一阶段时间: {_returnPhase1Duration}秒");
-        }
-    }
-
-    [SerializeField]
-    [Tooltip("第二阶段的持续时间（秒）")]
-    private float _returnPhase2Duration = 0.25f;
-    public float returnPhase2Duration
-    {
-        get => _returnPhase2Duration;
-        set
-        {
-            _returnPhase2Duration = Mathf.Max(0.01f, value);
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新第二阶段时间: {_returnPhase2Duration}秒");
-        }
-    }
-
-    [SerializeField]
-    [Tooltip("在第二阶段前方的偏移距离（米），避免被相邻卡遮挡")]
-    private float _returnFrontBias = 0.15f;
-    public float returnFrontBias
-    {
-        get => _returnFrontBias;
-        set
-        {
-            _returnFrontBias = Mathf.Max(0f, value);
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新前向偏移: {_returnFrontBias}米");
-        }
-    }
-
-    [SerializeField]
-    [Tooltip("第二阶段期间临时提高排序顺序，避免被相邻卡挡住")]
-    private int _returnSortingBoost = 20;
-    public int returnSortingBoost
-    {
-        get => _returnSortingBoost;
-        set
-        {
-            _returnSortingBoost = Mathf.Max(0, value);
-            if (debugHoverLogs) Debug.Log($"[CardView3D] 更新排序提升: +{_returnSortingBoost}");
-        }
-    }
-
-    [Header("Click Filtering")]
-    [Tooltip("按下至松开的最大时间（秒），低于该值且移动距离很小则视为点击，不触发回家动画")]
+    // Simplified follow/drag parameters
+    public float followDragSmooth = 0.04f;
+    public float dragFrontBias = 0.03f;
     public float clickMaxDuration = 0.15f;
-    [Tooltip("按下至松开的最大位移（米），低于该值且时间很短则视为点击")]
     public float clickMaxDistance = 0.05f;
 
+    // Hand stacking Y logic
+    private float _targetY = 0f; // transient offsets (e.g. elevation)
+    private float _baseY = 0.3f; // per-card base Y
+    private static float s_nextY = 0.3f;
+    private const float Y_SPACING = 0.02f;
+    private const float MIN_HAND_Y = 0.28f;
+    public bool simplifyMode = true; // keeps minimal behavior when true
 
-    [Header("Drag Visuals")]
-    [Tooltip("拖拽时朝向相机偏移的距离（米），避免与手牌同平面发生穿插")] public float dragFrontBias = 0.03f;
-    [Tooltip("拖拽时提升的排序顺序，适用于透明材质")] public int dragSortingBoost = 40;
-    [Header("Collision Elevation")]
-    [Tooltip("被阻挡时是否临时抬升 Y，避免卡到其他卡牌下方")] public bool elevateWhenBlocked = true;
-    [Tooltip("阻挡时抬升的最大高度（米）")] public float elevateMax = 0.12f;
-    [Tooltip("抬升上行速度（米/秒）")] public float elevateUpSpeed = 2.0f;
-    [Tooltip("回落速度（米/秒）")] public float elevateDownSpeed = 2.5f;
-    private float _elevateY = 0f;
-    [Tooltip("软碰撞修正的平滑时间（秒），越大越柔和")]
-    public float collisionSmoothTime = 0.06f;
-    [Tooltip("单帧碰撞修正的最大位移（米），限制 ComputePenetration 导致的抖动幅度")]
-    public float collisionResolveMaxStep = 0.025f;
-    private Vector3 _collisionAdjust = Vector3.zero;
-    private Vector3 _collisionAdjustVel = Vector3.zero;
+    // Home pose
+    private Vector3 _handRestPosition;
+    private Vector3 _homeLocalPos;
+    private Quaternion _homeLocalRot;
+    private Vector3 _homePos;
+    private Quaternion _homeRot;
+    private Transform _homeParent;
+    private bool _homeSet = false;
 
-
+    // Drag state
     private enum DragState { Idle, Picking, Dragging, Releasing }
     private DragState _state = DragState.Idle;
     public bool IsDragging => _state == DragState.Dragging || _state == DragState.Picking;
 
+    // Internal
     private Camera _cam;
-    private bool _hovering;
-    private bool _usingFallbackInput;
-    private Quaternion _baseRot;
     private Vector3 _dragOffsetWS;
-    private bool _dragOffsetInitialized;
-    private bool _dragFirstFrame; // kept for future use
-    [Header("Drag Follow")]
-    public float followDragSmooth = 0.04f;
-    private Vector3 _lastTarget;
+    private bool _dragOffsetInitialized = false;
     private Vector3 _smoothVel;
-    private Vector3 _dragVel;
-    private float _tiltWeight;
-    private Coroutine _wobbleCo;
-    private Coroutine _fadeCo;
-    // 拖拽开始时由力矩决定的摇晃方向（+1 顺时针进相位，-1 逆时针），以及是否已确定
-    private float _wobbleDir = 1f;
-    private bool _wobbleDirSet = false;
-    private float _startBoostT = 0f;
-    private float _mouseDownTime = 0f;
+    private Vector3 _lastTarget;
+    private float _mouseDownTime;
     private Vector3 _mouseDownPos;
-    private Vector3 _lastPointerWS = Vector3.zero;
-    private Vector3 _lastCenterWS = Vector3.zero;
-    private bool _hasPointerAnchor = false;
-    private float _pointerWorldSpeed = 0f;
-    private Vector2 _pointerLocalNorm = Vector2.zero;
-    private Vector2 _pointerLocalPlanar = Vector2.zero;
-    private Vector2 _pointerLocalPlanarPrev = Vector2.zero;
-    private float _pointerAngle = 0f;
-    private float _wobbleIdleTimer = 0f;
-    private float _wobbleCooldownTimer = 0f;
 
-    // Home pose for hand return
-    private Vector3 _homePos;
-    private Quaternion _homeRot;
-    private bool _homeSet;
-    private Transform _homeParent;          // zone transform captured when snapping
-    private Vector3 _homeLocalPos;
-    private Quaternion _homeLocalRot;
+    // Return coroutine control
     private Coroutine _returnHomeCo;
     public bool IsReturningHome { get; private set; }
-    private Renderer[] _allRenderers;
-    private int[] _origSortingOrders;
-    private int[] _handBaseSortingOrders;
-    // 移除临时材质/排序强制逻辑，避免停顿与回撤
-
-    [Header("Hover Collider Extend")]
-    [Tooltip("当被 hover 时，沿本地 -Z 方向额外延伸的碰撞箱距离（米）")]
-    public float hoverColliderExtendZ = 0.06f;
-    private bool _boxExtended = false;
-    private Vector3 _boxOrigSize;
-    private Vector3 _boxOrigCenter;
-
-    [Header("Shadow Caster Helper")]
-    [Tooltip("为保证贴近桌面时也有阴影，添加一个仅投影的辅助 Quad")]
-    public bool addShadowCasterHelper = true;
-    public float shadowCasterZOffset = -0.001f;
-    public float shadowCasterScaleMul = 1.02f;
-    private Renderer _shadowCasterRenderer;
-
-    [Header("Input Mode")] public bool suppressOnMouseHandlers = true; // 由 HandSplineZone 集中驱动时开启
-    private bool _allowInternalInvoke = false; // 外部桥调用时临时打开
-
-    // === External drag bridge ===
-    private bool _externalHolding = false;
-    public void ExternalBeginDrag()
-    {
-        if (!IsDragging)
-        {
-            _externalHolding = true;
-            _allowInternalInvoke = true; OnMouseDown(); _allowInternalInvoke = false;
-        }
-    }
-    public void ExternalDrag()
-    {
-        if (_externalHolding)
-        {
-            _allowInternalInvoke = true; OnMouseDrag(); _allowInternalInvoke = false;
-        }
-    }
-    public void ExternalEndDrag()
-    {
-        if (_externalHolding)
-        {
-            _allowInternalInvoke = true; OnMouseUp(); _allowInternalInvoke = false;
-            _externalHolding = false;
-        }
-    }
-
-    private float _targetY; // Unified target Y coordinate
-    private float _baseY; // Base Y coordinate for each card
-    private static float s_nextY = 0.3f; // Static Y tracker for spacing between cards (start at 0.3 per request)
-    private const float Y_SPACING = 0.02f; // Spacing between cards
-    private float _hoverY; // Explicit target Y coordinate during hover
-
-    private float _handRestY; // Y coordinate for hand rest position
-    private float _dragY; // Y coordinate during dragging
-    private const float MIN_HAND_Y = 0.28f; // Enforce no y-values smaller than this
-    // Simplified mode: when true, only run the core Y/drag/return behaviour requested.
-    // Set to false to restore full behaviour.
-    public bool simplifyMode = true;
+    private bool _forceReturnYNow = false;
 
     private void Awake()
     {
-        // 强制初始化，防止Inspector和Prefab污染
-        // 不再使用字段，相关数值直接硬编码到用到的地方
-
         _cam = Camera.main != null ? Camera.main : Camera.current;
         if (body == null) body = GetComponent<Rigidbody>();
         if (box == null) box = GetComponent<BoxCollider>();
-        if (box == null) box = GetComponentInChildren<BoxCollider>(true);
-        // Ensure card colliders use a shared frictionless physic material to avoid
-        // friction-caused sticking/penetration artifacts between cards.
-        try
-        {
-            if (s_cardNoFrictionMat == null)
-            {
-                s_cardNoFrictionMat = new PhysicMaterial("Card_NoFriction")
-                {
-                    dynamicFriction = 0f,
-                    staticFriction = 0f,
-                    frictionCombine = PhysicMaterialCombine.Minimum,
-                    bounciness = 0f,
-                    bounceCombine = PhysicMaterialCombine.Minimum
-                };
-            }
-            // Assign to primary box collider
-            if (box != null) box.material = s_cardNoFrictionMat;
-            // Also assign to any other colliders under the card (children)
-            var cols = GetComponentsInChildren<Collider>(true);
-            if (cols != null)
-            {
-                for (int i = 0; i < cols.Length; i++)
-                {
-                    var c = cols[i]; if (c == null) continue;
-                    // keep triggers as-is but they can still carry material without harm
-                    c.material = s_cardNoFrictionMat;
-                }
-            }
-
-            // If the primary box collider is a trigger (used by other systems), create or
-            // reuse a child non-trigger collider for physics interactions so cards can
-            // still participate in frictionless collisions without changing the trigger.
-            try
-            {
-                if (box != null && box.isTrigger)
-                {
-                    BoxCollider phys = null;
-                    var t = transform.Find("PhysicsCollider");
-                    if (t != null) phys = t.GetComponent<BoxCollider>();
-                    if (phys == null)
-                    {
-                        var go = new GameObject("PhysicsCollider");
-                        go.transform.SetParent(transform, false);
-                        phys = go.AddComponent<BoxCollider>();
-                    }
-                    phys.size = box.size;
-                    phys.center = box.center;
-                    phys.isTrigger = false;
-                    phys.material = s_cardNoFrictionMat;
-                    phys.gameObject.layer = gameObject.layer;
-                }
-            }
-            catch { }
-        }
-        catch { }
-        createId = s_nextCreateId++;
-        _baseRot = transform.rotation; // 使用当前旋转作为基准
+        // lightweight safe defaults
         if (body != null)
         {
             body.useGravity = false;
             body.isKinematic = true;
             body.interpolation = RigidbodyInterpolation.Interpolate;
-            body.collisionDetectionMode = CollisionDetectionMode.Continuous;
             body.constraints = RigidbodyConstraints.FreezeAll;
         }
-        if (box != null)
-        {
-            box.enabled = true;
-            // Do not force box.isTrigger here; some systems rely on the collider being a trigger.
-            // If a physics (non-trigger) collider is required, a separate child collider will be created.
-        }
-        _allRenderers = GetComponentsInChildren<Renderer>(true);
-        if (_allRenderers != null && _allRenderers.Length > 0)
-        {
-            int n = _allRenderers.Length;
-            _origSortingOrders = new int[n];
-            for (int i = 0; i < n; i++)
-            {
-                var r = _allRenderers[i];
-                _origSortingOrders[i] = r.sortingOrder;
-                // 启用投射阴影与接收阴影
-                try { r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On; r.receiveShadows = true; } catch {}
-            }
-        }
-        if (debugHoverLogs) Debug.Log($"[CardView3D] Awake collider={(box!=null)} trigger={box?.isTrigger} layer={gameObject.layer} ({cardViewRevision})");
-
-        if (addShadowCasterHelper) EnsureShadowCaster();
     }
 
     private void Start()
     {
-        // Initialize the base Y coordinate for this card and increment for the next card
+        // init per-card baseY spacing (A-scheme)
         _baseY = s_nextY;
-        _handRestY = _baseY; // Set hand rest Y to base Y
-        _dragY = _baseY + 0.1f; // Add offset for dragging height
         s_nextY += Y_SPACING;
+        _handRestPosition = transform.position;
+        _handRestPosition.y = GetFinalHandY();
+        _homePos = _handRestPosition;
+        _homeRot = transform.rotation;
+        _homeSet = true;
     }
 
-    // Return the canonical final Y that represents this card's resting/stacked height.
-    private float GetFinalHandY()
+    // Canonical final hand Y (base + transient offset)
+    public float GetFinalHandY() => _baseY + _targetY;
+
+    public void SetTargetY(float offsetY) => _targetY = offsetY;
+
+    private void UpdateYCoordinate(float smoothTime = 0.06f)
     {
-        // final y comes from per-card base plus any target offset
-        return _baseY + _targetY;
+        Vector3 pos = transform.position;
+        float finalY = GetFinalHandY();
+        float targetY = IsDragging ? Mathf.Max(finalY + 0.08f, finalY + 0.08f) : finalY; // simple drag lift
+        pos.y = Mathf.Lerp(pos.y, targetY, Time.deltaTime / smoothTime);
+        if (pos.y < MIN_HAND_Y) pos.y = MIN_HAND_Y;
+        transform.position = pos;
     }
+
+    private void Update()
+    {
+        if (simplifyMode)
+        {
+            // minimal input handling (fallback mouse)
+            if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
+            if (_cam != null)
+            {
+                if (Input.GetMouseButtonDown(0)) OnMouseDown();
+                if (Input.GetMouseButton(0)) OnMouseDrag();
+                if (Input.GetMouseButtonUp(0)) OnMouseUp();
+            }
+            // simple collision correction while dragging
+            if (IsDragging)
+            {
+                Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out bool blocked);
+                transform.position = corr;
+            }
+            UpdateYCoordinate();
+            return;
+        }
+
+        // non-simplify path preserved minimal: input fallback
+        if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
+        if (_cam != null)
+        {
+            if (Input.GetMouseButtonDown(0)) OnMouseDown();
+            if (Input.GetMouseButton(0)) OnMouseDrag();
+            if (Input.GetMouseButtonUp(0)) OnMouseUp();
+        }
+
+        if (IsDragging)
+        {
+            Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out bool blocked);
+            transform.position = corr;
+        }
+
+        UpdateYCoordinate();
+    }
+
+    // Public API: store a home pose (world pos/rot)
+    public void SetHomePose(Vector3 pos, Quaternion rot)
+    {
+        _handRestPosition = pos;
+        _handRestPosition.y = GetFinalHandY();
+        _homeParent = null;
+        _homePos = _handRestPosition;
+        _homeRot = Quaternion.Euler(rot.eulerAngles.x, rot.eulerAngles.y, 0f);
+        _homeLocalPos = pos;
+        _homeLocalRot = _homeRot;
+        _homeSet = true;
+    }
+
+    // Store home from zone, but normalize Y to canonical finalY
+    public void SetHomeFromZone(Transform zone, Vector3 worldPos, Quaternion worldRot)
+    {
+        _homeParent = zone;
+        if (zone != null)
+        {
+            _homeLocalPos = zone.InverseTransformPoint(worldPos);
+            _homeLocalRot = Quaternion.Inverse(zone.rotation) * worldRot;
+        }
+        else
+        {
+            _homeLocalPos = worldPos;
+            _homeLocalRot = worldRot;
+        }
+        Vector3 adjusted = new Vector3(worldPos.x, GetFinalHandY(), worldPos.z);
+        _homePos = adjusted;
+        _homeRot = Quaternion.Euler(worldRot.eulerAngles.x, worldRot.eulerAngles.y, 0f);
+        _homeSet = true;
+    }
+
+    // Get world home pose (updates cached if parent present)
+    private void GetHomeWorldPose(out Vector3 pos, out Quaternion rot)
+    {
+        if (_homeParent != null && _homeParent.gameObject.activeInHierarchy)
+        {
+            pos = _homeParent.TransformPoint(_homeLocalPos);
+            rot = _homeParent.rotation * _homeLocalRot;
+            _homePos = pos; _homeRot = rot;
+        }
+        else
+        {
+            pos = _homePos; rot = _homeRot;
+        }
+    }
+
+    public (Vector3, Quaternion) GetHomePose() { GetHomeWorldPose(out Vector3 p, out Quaternion r); return (p, r); }
+
+    public void SnapTo(Vector3 pos, Quaternion rot)
+    {
+        pos.y = GetFinalHandY();
+        _handRestPosition = pos;
+        StopAllCoroutines();
+        transform.position = pos;
+        transform.rotation = rot;
+        if (body != null) { body.isKinematic = true; body.useGravity = false; body.constraints = RigidbodyConstraints.FreezeAll; }
+        SetHomePose(pos, rot);
+        _state = DragState.Idle;
+    }
+
+    public void BeginSmoothReturnToHome(float aheadZ, float phase1Time, float phase2Time)
+    {
+        if (!_homeSet) return;
+        if (_returnHomeCo != null) StopCoroutine(_returnHomeCo);
+        _returnHomeCo = StartCoroutine(ReturnToHomeTwoPhase(aheadZ, Mathf.Max(0.01f, phase1Time), Mathf.Max(0.01f, phase2Time)));
+    }
+
+    public void ReturnHomeUnified()
+    {
+        // prefer HandSplineZone, but fall back to local return
+        var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+        try { if (zone != null && zone.TryReturnCardToHome(this)) return; } catch {}
+        if (_homeSet) BeginSmoothReturnToHome(0.15f, 0.18f, 0.22f);
+        else StartCoroutine(ReleaseDrop());
+    }
+
+    public void ForceReturnYNow() { _forceReturnYNow = true; }
+
+    private IEnumerator ReturnToHomeTwoPhase(float aheadZ, float t1, float t2)
+    {
+        IsReturningHome = true;
+        Vector3 target = _handRestPosition;
+        float savedTargetY = _targetY;
+        SetTargetY(0f);
+        float finalY = GetFinalHandY();
+        target.y = finalY;
+
+        // Phase 1: XZ move towards aheadZ offset while Y becomes finalY
+        float t = 0f;
+        Vector3 start = transform.position;
+        Vector3 temp = new Vector3(target.x, finalY, target.z + aheadZ);
+        while (t < t1)
+        {
+            if (_forceReturnYNow)
+            {
+                finalY = GetFinalHandY();
+                target.y = finalY; _handRestPosition.y = finalY; _homePos.y = finalY; _forceReturnYNow = false;
+            }
+            t += Time.deltaTime;
+            float a = Mathf.Clamp01(t / t1);
+            transform.position = new Vector3(Mathf.Lerp(start.x, temp.x, a), Mathf.Lerp(start.y, finalY, a), Mathf.Lerp(start.z, temp.z, a));
+            yield return null;
+        }
+
+        // Phase 2: move Z back to target.z and set rotation
+        t = 0f; start = transform.position;
+        while (t < t2)
+        {
+            if (_forceReturnYNow)
+            {
+                finalY = GetFinalHandY();
+                target.y = finalY; _handRestPosition.y = finalY; _homePos.y = finalY; _forceReturnYNow = false;
+            }
+            t += Time.deltaTime;
+            float a = Mathf.Clamp01(t / t2);
+            transform.position = new Vector3(Mathf.Lerp(start.x, target.x, a), finalY, Mathf.Lerp(start.z, target.z, a));
+            yield return null;
+        }
+
+        transform.position = new Vector3(target.x, finalY, target.z);
+        SetTargetY(savedTargetY);
+        IsReturningHome = false; _returnHomeCo = null; _state = DragState.Idle; yield return null;
+    }
+
+    private IEnumerator ReleaseDrop()
+    {
+        Vector3 start = transform.position;
+        Vector3 end = new Vector3(transform.position.x, 0f, transform.position.z);
+        Quaternion startR = transform.rotation;
+        Quaternion endR = Quaternion.Euler(90f, transform.rotation.eulerAngles.y, 0f);
+        float dur = 0.2f; float t = 0f; Vector3 vel = Vector3.zero;
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float p = Mathf.Clamp01(t / dur);
+            Vector3 targ = Vector3.Lerp(start, end, p);
+            transform.position = Vector3.SmoothDamp(transform.position, targ, ref vel, 0.05f);
+            transform.rotation = Quaternion.Slerp(startR, endR, p);
+            yield return null;
+        }
+        transform.position = end; transform.rotation = endR; _state = DragState.Idle; yield return null;
+    }
+
+    // Basic OnMouse handlers keeping minimal behavior
+    private void OnMouseDown()
+    {
+        _mouseDownTime = Time.unscaledTime;
+        _mouseDownPos = transform.position;
+        _state = DragState.Picking;
+        _dragOffsetInitialized = false;
+        if (body != null) { body.isKinematic = true; body.useGravity = false; body.constraints = RigidbodyConstraints.FreezePositionY; }
+        _lastTarget = transform.position;
+        StartCoroutine(PickupLift());
+    }
+
+    private IEnumerator PickupLift()
+    {
+        float t = 0f, dur = 0.12f;
+        Vector3 start = transform.position;
+        Vector3 end = new Vector3(start.x, GetFinalHandY() + 0.08f, start.z) + (_cam != null ? Vector3.Scale(_cam.transform.forward, new Vector3(1,0,1)).normalized * dragFrontBias : Vector3.forward * dragFrontBias);
+        while (t < dur)
+        {
+            t += Time.deltaTime;
+            float p = Mathf.Clamp01(t / dur);
+            transform.position = Vector3.Lerp(start, end, p);
+            yield return null;
+        }
+        _state = DragState.Dragging;
+    }
+
+    private void OnMouseDrag()
+    {
+        if (_state != DragState.Dragging && _state != DragState.Picking) return;
+        float planeY = GetFinalHandY() + 0.08f;
+        if (TryRayOnPlane(planeY, out Vector3 pt))
+        {
+            if (!_dragOffsetInitialized)
+            {
+                _dragOffsetWS = transform.position - pt;
+                _dragOffsetInitialized = true;
+            }
+            Vector3 target = pt + _dragOffsetWS + (_cam != null ? Vector3.Scale(_cam.transform.forward, new Vector3(1,0,1)).normalized * dragFrontBias : Vector3.forward * dragFrontBias);
+            target.y = planeY;
+            Vector3 corr = AdjustTargetForCollisions(transform.position, target, out bool blocked);
+            transform.position = Vector3.SmoothDamp(transform.position, corr, ref _smoothVel, followDragSmooth);
+            _lastTarget = target;
+        }
+    }
+
+    private void OnMouseUp()
+    {
+        if (_state == DragState.Idle) return;
+        float held = Time.unscaledTime - _mouseDownTime;
+        float moved = Vector3.Distance(transform.position, _mouseDownPos);
+        if (_state == DragState.Picking || (held <= clickMaxDuration && moved <= clickMaxDistance))
+        {
+            InitializeForNextDrag();
+            return;
+        }
+        _state = DragState.Releasing;
+        // Prefer zone return
+        var zone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
+        if (zone != null && zone.TryReturnCardToHome(this)) return;
+        // else local return
+        BeginSmoothReturnToHome(0.15f, 0.18f, 0.22f);
+    }
+
+    private bool TryRayOnPlane(float planeY, out Vector3 hit)
+    {
+        if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
+        var plane = new Plane(Vector3.up, new Vector3(0f, planeY, 0f));
+        var ray = _cam.ScreenPointToRay(Input.mousePosition);
+        if (plane.Raycast(ray, out float enter)) { hit = ray.GetPoint(enter); return true; }
+        hit = Vector3.zero; return false;
+    }
+
+    // Lightweight collision adjust: only simple overlap test and upward push
+    private Vector3 AdjustTargetForCollisions(Vector3 current, Vector3 target, out bool blocked)
+    {
+        blocked = false;
+        if (box == null) return target;
+        Vector3 corrected = target;
+        Collider[] overlaps = Physics.OverlapBox(corrected + box.center, box.size * 0.5f, transform.rotation, ~0, QueryTriggerInteraction.Ignore);
+        for (int i = 0; i < overlaps.Length; i++)
+        {
+            var other = overlaps[i]; if (other == null || other.transform == transform) continue;
+            // push up minimally
+            corrected += Vector3.up * 0.01f;
+            blocked = true;
+        }
+        return corrected;
+    }
+
+    private void InitializeForNextDrag()
+    {
+        _dragOffsetInitialized = false;
+        _state = DragState.Idle;
+        _smoothVel = Vector3.zero;
+        _lastTarget = transform.position;
+        if (body != null) { body.isKinematic = true; body.useGravity = false; body.constraints = RigidbodyConstraints.FreezeAll; }
+    }
+
+    public void AlignToSlotSurface(object slot) { /* kept for compatibility; minimal noop */ }
+
+    public void GetPlacementExtents(Quaternion r, out float minY, out float maxY) { minY = -DefaultPlacementHalfThickness; maxY = DefaultPlacementHalfThickness; }
+    public const float DefaultPlacementHalfThickness = 0.01f;
+
+    // Minimal Bind to keep usage elsewhere safe
+    public void Bind(object data)
+    {
+        // lightweight binding: set texts if available
+        if (data == null) return;
+        if (NameText != null) NameText.gameObject.SetActive(false);
+        if (HPText != null) HPText.gameObject.SetActive(false);
+        if (ATKText != null) ATKText.gameObject.SetActive(false);
+    }
+
+    public void ApplyHoverColliderExtend(bool enable)
+    {
+        if (box == null) return;
+        if (enable) box.size = box.size + new Vector3(0f, 0f, 0.06f);
+        else box.size = box.size; // noop in simplified mode
+    }
+
+    private int[] _handBaseSortingOrders;
+    private Renderer[] _allRenderers;
+    public void ApplyHandRenderOrder(int order)
+    {
+        if (_allRenderers == null || _allRenderers.Length == 0) _allRenderers = GetComponentsInChildren<Renderer>(true);
+        if (_allRenderers == null) return;
+        if (_handBaseSortingOrders == null || _handBaseSortingOrders.Length != _allRenderers.Length)
+        {
+            _handBaseSortingOrders = new int[_allRenderers.Length];
+            for (int i = 0; i < _allRenderers.Length; i++) _handBaseSortingOrders[i] = _allRenderers[i] != null ? _allRenderers[i].sortingOrder : 0;
+        }
+        for (int i = 0; i < _allRenderers.Length; i++)
+        {
+            var r = _allRenderers[i]; if (r == null) continue;
+            r.sortingOrder = _handBaseSortingOrders[i] + order;
+        }
+    }
+
+    // Keep small helper used previously elsewhere
+    private static float Normalize180(float angle) { angle = Mathf.Repeat(angle + 180f, 360f) - 180f; return angle; }
+
+    // Small safety helper used earlier; kept but simplified
+    private static float AdjustCardY(float y) { return Mathf.Max(y, 22f); }
+}
 
     private void RecordHoverY()
     {
