@@ -1271,7 +1271,7 @@ MonoBehaviour:
   deckInitialOrientation: {fileID: 0}
   overflowEventZone: {fileID: 1448669494}
   maxHandCards: 9
-  pileVisualizer: {fileID: 0}
+  pileVisualizer: {fileID: 776546140}
   starterDeck:
   - CA_ID: 5
     Count: 2

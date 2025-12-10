@@ -271,6 +271,19 @@ public class CardView3D : MonoBehaviour
         }
     }
 
+    private float _targetY; // Unified target Y coordinate
+    private float _baseY; // Base Y coordinate for each card
+    private static float s_nextY = 0.3f; // Static Y tracker for spacing between cards (start at 0.3 per request)
+    private const float Y_SPACING = 0.02f; // Spacing between cards
+    private float _hoverY; // Explicit target Y coordinate during hover
+
+    private float _handRestY; // Y coordinate for hand rest position
+    private float _dragY; // Y coordinate during dragging
+    private const float MIN_HAND_Y = 0.28f; // Enforce no y-values smaller than this
+    // Simplified mode: when true, only run the core Y/drag/return behaviour requested.
+    // Set to false to restore full behaviour.
+    public bool simplifyMode = true;
+
     private void Awake()
     {
         // 强制初始化，防止Inspector和Prefab污染
@@ -369,8 +382,80 @@ public class CardView3D : MonoBehaviour
         if (addShadowCasterHelper) EnsureShadowCaster();
     }
 
+    private void Start()
+    {
+        // Initialize the base Y coordinate for this card and increment for the next card
+        _baseY = s_nextY;
+        _handRestY = _baseY; // Set hand rest Y to base Y
+        _dragY = _baseY + 0.1f; // Add offset for dragging height
+        s_nextY += Y_SPACING;
+    }
+
+    // Return the canonical final Y that represents this card's resting/stacked height.
+    private float GetFinalHandY()
+    {
+        // final y comes from per-card base plus any target offset
+        return _baseY + _targetY;
+    }
+
+    private void RecordHoverY()
+    {
+        // Record the current Y as the hover target
+        _hoverY = transform.position.y;
+    }
+
+    public void SetTargetY(float offsetY)
+    {
+        // Set the target Y coordinate
+        _targetY = offsetY;
+    }
+
+    private void UpdateYCoordinate(float smoothTime = 0.06f)
+    {
+        // Adjust the y-coordinate based on the current state. Final resting Y is computed first.
+        Vector3 position = transform.position;
+        float finalY = GetFinalHandY();
+        float targetY = IsDragging ? _dragY : finalY; // during drag use dragY; otherwise move toward final resting Y
+        position.y = Mathf.Lerp(position.y, targetY, Time.deltaTime / smoothTime);
+        transform.position = position;
+    }
+
     private void Update()
     {
+        if (simplifyMode)
+        {
+            // Minimal input handling: allow external bridge and fallback mouse drag to work
+            if (!suppressOnMouseHandlers)
+            {
+                if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
+                if (_cam != null)
+                {
+                    if (Input.GetMouseButtonDown(0)) { _usingFallbackInput = true; OnMouseDown(); }
+                    if (_usingFallbackInput)
+                    {
+                        if (Input.GetMouseButton(0)) { OnMouseDrag(); }
+                        if (Input.GetMouseButtonUp(0)) { _usingFallbackInput = false; OnMouseUp(); }
+                    }
+                }
+            }
+
+            // If dragging, perform a single collision correction pass (avoid changing targetY here)
+            if (_state == DragState.Dragging)
+            {
+                bool blocked;
+                Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out blocked);
+                transform.position = corr;
+            }
+
+            // Update Y toward canonical final or drag height
+            UpdateYCoordinate();
+
+            // Enforce minimum Y
+            Vector3 __tmpP = transform.position;
+            if (__tmpP.y < MIN_HAND_Y) { __tmpP.y = MIN_HAND_Y; transform.position = __tmpP; }
+
+            return;
+        }
         if (!suppressOnMouseHandlers)
         {
             if (_cam == null) _cam = Camera.main != null ? Camera.main : Camera.current;
@@ -397,6 +482,7 @@ public class CardView3D : MonoBehaviour
                 if (Input.GetMouseButtonUp(0)) { _usingFallbackInput = false; OnMouseUp(); }
             }
         }
+
         // 全局兜底：鼠标松开无论指针在哪里都结束拖拽，避免状态卡住导致只能拖一次
         if (IsDragging && !Input.GetMouseButton(0))
         {
@@ -409,52 +495,33 @@ public class CardView3D : MonoBehaviour
         {
             bool blocked;
             Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out blocked);
-            if ((corr - transform.position).sqrMagnitude > 1e-8f)
-            {
-                Debug.Log($"[CardView3D] transform.position修改前: {transform.position}");
-                transform.position = corr;
-                Debug.Log($"[CardView3D] transform.position修改后: {transform.position}");
-            }
+            transform.position = corr;
+
             if (elevateWhenBlocked)
             {
-                float up = elevateUpSpeed * Time.deltaTime;
-                float down = elevateDownSpeed * Time.deltaTime;
                 float planeY = 0.07f;
-                _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
-                Vector3 p = transform.position; p.y = planeY + _elevateY; transform.position = p;
+                SetTargetY(blocked ? elevateMax : 0f);
             }
         }
-        if (_state == DragState.Dragging)
-        {
-            bool blocked;
-            Vector3 corr = AdjustTargetForCollisions(transform.position, transform.position, out blocked);
-            _collisionAdjust = Vector3.SmoothDamp(_collisionAdjust, corr - transform.position, ref _collisionAdjustVel, Mathf.Max(0.01f, collisionSmoothTime));
-            if (_collisionAdjust.sqrMagnitude > 0f) transform.position += _collisionAdjust;
-            if (elevateWhenBlocked)
-            {
-                float up = elevateUpSpeed * Time.deltaTime;
-                float down = elevateDownSpeed * Time.deltaTime;
-                float planeY = 0.07f;
-                _elevateY = Mathf.Clamp(blocked ? (_elevateY + up) : (_elevateY - down), 0f, Mathf.Max(0f, elevateMax));
-                Vector3 p = transform.position; p.y = planeY + _elevateY; transform.position = p;
-            }
-        }
-        if (_state == DragState.Dragging)
-        {
-            bool blocked2;
-            Vector3 corr2 = AdjustTargetForCollisions(transform.position, transform.position, out blocked2);
-            if ((corr2 - transform.position).sqrMagnitude > 1e-8f) transform.position = corr2;
-        }
+
+        // Apply unified Y coordinate adjustment
+        UpdateYCoordinate();
+
+        // Enforce minimum Y across all states to avoid tiny 0.0x values
+        Vector3 __p = transform.position;
+        if (__p.y < MIN_HAND_Y) { __p.y = MIN_HAND_Y; transform.position = __p; }
     }
 
     public void SetHomePose(Vector3 pos, Quaternion rot)
     {
         // 记录手牌静止排列时的真实位置
         _handRestPosition = pos;
+        // Ensure stored home position uses the canonical final Y
+        _handRestPosition.y = GetFinalHandY();
         // 清除父级引用
         _homeParent = null;
         // 直接使用世界空间坐标和旋转
-        _homePos = pos;
+        _homePos = _handRestPosition;
         // 强制零 Z 轴旋转，确保手牌与归位过程中 Z 始终为 0
         Vector3 rEuler = rot.eulerAngles;
         Quaternion rotZ0 = Quaternion.Euler(rEuler.x, rEuler.y, 0f);
@@ -488,7 +555,9 @@ public class CardView3D : MonoBehaviour
         }
 
     // 记录世界空间坐标和旋转（用于快速访问）
-    _homePos = worldPos;
+    // Adjust worldPos Y to canonical final Y so zone-provided Y doesn't override stacking
+    Vector3 adjustedWorldPos = new Vector3(worldPos.x, GetFinalHandY(), worldPos.z);
+    _homePos = adjustedWorldPos;
     // 强制 Z 轴为零，保证手牌与归位过程中 Z 始终为 0
     Vector3 wr = worldRot.eulerAngles;
 
@@ -546,11 +615,7 @@ public class CardView3D : MonoBehaviour
         if (!TryGetWorldBounds(out Bounds bounds)) return;
 
         float surfaceY = slot.GetSurfaceWorldY();
-        float bottom = bounds.min.y;
-        float delta = surfaceY - bottom;
-        if (Mathf.Abs(delta) < 0.0001f) return;
-
-        transform.position += Vector3.up * delta;
+        SetTargetY(surfaceY - _baseY);
 
         if (_homeSet)
         {
@@ -634,7 +699,9 @@ public class CardView3D : MonoBehaviour
         // 调试：打印传入的 pos 值
         Debug.Log($"SnapTo called with pos: {pos}");
 
-        // 记录手牌静止排列时的真实位置
+        // 记录手牌静止排列时的真实位置 (use canonical final Y)
+        float finalY = GetFinalHandY();
+        pos.y = finalY;
         _handRestPosition = pos;
 
         StopAllCoroutines();
@@ -655,7 +722,8 @@ public class CardView3D : MonoBehaviour
     {
         if (!_homeSet) return;
         if (_returnHomeCo != null) StopCoroutine(_returnHomeCo);
-        _returnHomeCo = StartCoroutine(ReturnToHomeTwoPhase(aheadZ, phase1Time, phase2Time));
+        // Use the fuller implementation which handles physics restore and final state cleanup.
+        _returnHomeCo = StartCoroutine(ReturnToHomeTwoPhase_Old(aheadZ, phase1Time, phase2Time));
     }
 
     // Unified return entry point: always attempt to use parent HandSplineZone (if any)
@@ -687,10 +755,86 @@ public class CardView3D : MonoBehaviour
 
     // 记录拖拽前的Y值（非交互状态时的Y）
     private float _preDragY;
+    // External control: when set, coroutines will refresh their returnTarget.y to match GetFinalHandY()
+    private bool _forceReturnYNow = false;
+
+    // 外部调用：强制使正在进行的二段归位的目标 Y 立即同步为当前的最终 Y
+    public void ForceReturnYNow()
+    {
+        _forceReturnYNow = true;
+    }
 
     private IEnumerator ReturnToHomeTwoPhase(float aheadZ, float t1, float t2)
     {
         Debug.Log($"[CardView3D] 开始归位 - 当前世界位置: {transform.position}, 目标位置: {_handRestPosition}, aheadZ: {aheadZ}, 阶段1时间: {t1}, 阶段2时间: {t2}");
+
+        Vector3 returnTarget = _handRestPosition;
+        // Temporarily ignore transient _targetY (e.g., elevation) so return targets the per-card base
+        float savedTargetY = _targetY;
+        SetTargetY(0f);
+        float finalY = GetFinalHandY();
+
+        // Phase 1: Smoothly move to the temporary position
+        float t = 0f;
+        while (t < t1)
+        {
+            // if external caller requested finalY sync, refresh it and the stored home pos
+            if (_forceReturnYNow)
+            {
+                finalY = GetFinalHandY();
+                returnTarget.y = finalY;
+                _handRestPosition.y = finalY;
+                _homePos.y = finalY;
+                _forceReturnYNow = false;
+            }
+            t += Time.deltaTime;
+            float progress = Mathf.Clamp01(t / t1);
+            transform.position = new Vector3(
+                Mathf.Lerp(transform.position.x, returnTarget.x, progress),
+                finalY, // Maintain final Y during phase 1
+                Mathf.Lerp(transform.position.z, returnTarget.z + aheadZ, progress)
+            );
+            yield return null;
+        }
+
+        // Phase 2: Smoothly move to the final position
+        t = 0f;
+        while (t < t2)
+        {
+            // allow external caller to force finalY during phase2 as well
+            if (_forceReturnYNow)
+            {
+                finalY = GetFinalHandY();
+                returnTarget.y = finalY;
+                _handRestPosition.y = finalY;
+                _homePos.y = finalY;
+                _forceReturnYNow = false;
+            }
+            t += Time.deltaTime;
+            float progress = Mathf.Clamp01(t / t2);
+            transform.position = new Vector3(
+                Mathf.Lerp(transform.position.x, returnTarget.x, progress),
+                finalY, // Maintain final Y during phase 2
+                Mathf.Lerp(transform.position.z, returnTarget.z, progress)
+            );
+            yield return null;
+        }
+
+        // Ensure the final position uses the canonical final Y
+        transform.position = new Vector3(returnTarget.x, finalY, returnTarget.z);
+        // restore previous target offset
+        SetTargetY(savedTargetY);
+    }
+
+    private IEnumerator ReturnToHomeTwoPhase_Old(float aheadZ, float t1, float t2)
+    {
+        Debug.Log($"[CardView3D] 开始归位 - 当前世界位置: {transform.position}, 目标位置: {_handRestPosition}, aheadZ: {aheadZ}, 阶段1时间: {t1}, 阶段2时间: {t2}");
+
+        Vector3 returnTarget = _handRestPosition;
+        // Temporarily ignore transient _targetY (e.g., elevation) so return targets the per-card base
+        float savedTargetY = _targetY;
+        SetTargetY(0f);
+        float finalY = GetFinalHandY();
 
         // 在归位阶段尽量隔离物理：不禁用刚体组件本身（Rigidbody 没有 enabled），只关闭碰撞/重力并冻结
         bool saved = false; bool prevBoxEnabled=false; bool prevKin=false, prevGrav=false, prevDetect=false; RigidbodyConstraints prevCons=RigidbodyConstraints.None;
@@ -722,11 +866,9 @@ public class CardView3D : MonoBehaviour
     // 强制在第一阶段立即把卡牌摆正为 (90, 0, 0)（以避免在 phase1 结束前因角度导致穿插）
     Quaternion earlyFlatRot = Quaternion.Euler(90f, 0f, 0f);
     transform.rotation = earlyFlatRot;
-    // 使用拖拽前记录的Y值作为归位目标Y
-    // 归位目标为拖拽前的完整位置
-    Vector3 returnTarget = _handRestPosition;
+
     // temp point just "above" returnTarget 沿Z轴偏移
-    Vector3 tempXZ = new Vector3(returnTarget.x, returnTarget.y, returnTarget.z + aheadZ);
+    Vector3 tempXZ = new Vector3(returnTarget.x, finalY, returnTarget.z + aheadZ);
 
     // (no render-order boost here; HandSplineZone controls ordering to avoid phase2 occlusion)
 
@@ -735,7 +877,7 @@ public class CardView3D : MonoBehaviour
     float dur1 = Mathf.Max(0.0001f, returnPhase1Duration);
     Vector2 startXZ = new Vector2(startPos.x, startPos.z);
     Vector2 tempXZ2 = new Vector2(tempXZ.x, tempXZ.z);
-    float startY = _handRestPosition.y; // 确保 Y 值从一开始就是正确的
+    float startY = transform.position.y; // start from current Y, interpolate toward finalY
     Vector2 velocity = Vector2.zero;
 
         if (debugHoverLogs)
@@ -745,6 +887,15 @@ public class CardView3D : MonoBehaviour
 
             while (t < dur1)
         {
+            // allow external caller to force finalY while running
+            if (_forceReturnYNow)
+            {
+                finalY = GetFinalHandY();
+                returnTarget.y = finalY;
+                _handRestPosition.y = finalY;
+                _homePos.y = finalY;
+                _forceReturnYNow = false;
+            }
             t += Time.deltaTime;
             float a = Mathf.Clamp01(t / dur1);
 
@@ -769,7 +920,7 @@ public class CardView3D : MonoBehaviour
             // phase1: XZ插值到tempXZ，Y插值到returnTarget.y
             float newX = Mathf.Lerp(startPos.x, tempXZ.x, speedFactor);
             float newZ = Mathf.Lerp(startPos.z, tempXZ.z, speedFactor);
-            float newY = Mathf.Lerp(startY, returnTarget.y, speedFactor);
+            float newY = Mathf.Lerp(startY, finalY, speedFactor);
             transform.position = new Vector3(newX, newY, newZ);
             transform.rotation = earlyFlatRot;
 
@@ -781,9 +932,8 @@ public class CardView3D : MonoBehaviour
             yield return null;
         }
 
-    // 确保在进入阶段2之前，位置完全正确（Y 已到位）
-    // 归位动画阶段切换点：精确还原到拖拽前的真实初始位置
-    transform.position = returnTarget;
+    // Ensure position Y is at final value before phase2
+    transform.position = new Vector3(returnTarget.x, finalY, returnTarget.z);
     yield return null;
 
     // Phase 2: 从临时点平滑移动到最终位置
@@ -798,8 +948,8 @@ public class CardView3D : MonoBehaviour
         float a = Mathf.Clamp01(tP2 / dur2);
         var handZone = GetComponentInParent<EndfieldFrontierTCG.Hand.HandSplineZone>();
         float speedFactor = handZone != null ? handZone.returnPhase2Curve.Evaluate(a) : a;
-        float newZ = Mathf.LerpUnclamped(startP2.z, returnTarget.z, speedFactor);
-        transform.position = new Vector3(returnTarget.x, returnTarget.y, newZ);
+            float newZ = Mathf.LerpUnclamped(startP2.z, returnTarget.z, speedFactor);
+            transform.position = new Vector3(returnTarget.x, finalY, newZ);
         transform.rotation = Quaternion.Slerp(startR2, _homeRot, a);
         if (debugHoverLogs && tP2 % 0.1f < Time.deltaTime)
         {
@@ -807,8 +957,10 @@ public class CardView3D : MonoBehaviour
         }
         yield return null;
     }
-    // 归位动画结束，精确还原到拖拽前的真实初始位置
-    transform.position = returnTarget;
+    // 归位动画结束，精确还原到拖拽前的真实初始位置 (use finalY)
+    transform.position = new Vector3(returnTarget.x, finalY, returnTarget.z);
+    // restore previous target offset
+    SetTargetY(savedTargetY);
 
         // render order is managed by HandSplineZone; do not override here to avoid
         // inconsistent occlusion during phase2.
@@ -1702,7 +1854,7 @@ public class CardView3D : MonoBehaviour
             yaw = Mathf.Clamp(velRight * leanYawGain * boostK, -maxYaw, maxYaw);
         }
         else
-        {
+ {
             _hasPointerAnchor = false;
             _pointerLocalNorm = Vector2.zero;
             _pointerLocalPlanar = Vector2.zero;
